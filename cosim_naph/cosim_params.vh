@@ -1,0 +1,3 @@
+`define COSIM_NROWS  10
+`define COSIM_NTILES 3
+`define COSIM_NPASS  16

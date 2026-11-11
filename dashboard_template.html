@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Hybrid analog MAC - molecule dashboard</title>
+<style>
+ body{margin:0;background:#0d1117;color:#d6deeb;font-family:Segoe UI,Arial,sans-serif}
+ #bar{padding:8px 12px;background:#161b22;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+ button,select{background:#21262d;color:#d6deeb;border:1px solid #444c56;border-radius:6px;padding:5px 10px;cursor:pointer}
+ #legend{padding:4px 12px;font-size:12px}
+ #wrap{display:flex;gap:12px;padding:10px;align-items:flex-start;flex-wrap:wrap}
+ #side{display:flex;flex-direction:column;gap:8px}
+ canvas,#mol,#arch{background:#10151d;border:1px solid #2a313c;border-radius:6px}
+ #right{width:440px;display:flex;flex-direction:column;gap:8px}
+ #status{font-size:14px;min-height:70px}
+ #log{margin:0;padding:8px;background:#10151d;border:1px solid #2a313c;border-radius:6px;font-size:12px;height:340px;overflow:auto;white-space:pre-wrap}
+ table{border-collapse:collapse;margin:10px 12px;font-size:13px}
+ td,th{border:1px solid #2a313c;padding:3px 10px;text-align:right}
+</style></head><body>
+<div id="bar">
+ <b id="title"></b>
+ <button id="play">▶ Play</button><button id="back">◀ Step</button><button id="fwd">Step ▶</button>
+ <select id="mode"><option value="stage">every stage</option><option value="iter">one frame per iteration</option></select>
+ <label>delay <input id="speed" type="range" min="20" max="1000" value="250"> <span id="spv">250</span> ms</label>
+ <button id="nextorb">Next orbital ⏭</button>
+ <input id="scrub" type="range" min="0" value="0" style="width:240px">
+</div>
+<div id="legend">
+ <span style="color:#4fa3ff">■ digital / weight load</span>
+ <span style="color:#3fe08a">■ analog, v⁺ pass</span>
+ <span style="color:#ff6b81">■ analog, v⁻ pass</span>
+ <span style="color:#ffb454">■ ADC</span>
+ <span style="color:#c792ea">■ controller</span>
+ &nbsp; line width = signal size
+</div>
+<div id="wrap"><svg id="arch"></svg>
+ <div id="side"><svg id="mol" width="300" height="240"></svg>
+  <canvas id="levels" width="300" height="230"></canvas>
+  <canvas id="conv" width="300" height="150"></canvas></div>
+<div id="right"><div id="status"></div><pre id="log"></pre></div></div>
+<div id="status"></div>
+<pre id="log"></pre>
+<table id="result"></table>
+
+<script>
+const TRACE = __TRACE__;
+const T=TRACE, M=T.meta, n=M.n, nt=M.nt, tile=M.tile, EV=T.events;
+const NS="http://www.w3.org/2000/svg";
+const GREEN="#3fe08a",RED="#ff6b81",BLUE="#4fa3ff",ORG="#ffb454",PUR="#c792ea",IDLE="#2f3744",TXT="#aab4c3",BOX="#10151d";
+const svg=document.getElementById("arch");
+function S(e,o){for(const k in o)e.setAttribute(k,o[k]);return e;}
+function el(tag,o,parent){const e=document.createElementNS(NS,tag);S(e,o);(parent||svg).appendChild(e);return e;}
+function txt(x,y,s,o,parent){const e=el("text",Object.assign({x:x,y:y,fill:TXT,"font-size":10,"text-anchor":"middle"},o||{}),parent);e.textContent=s;return e;}
+document.getElementById("title").textContent="Hückel "+M.name+" on hybrid analog MAC";
+
+// ---------- geometry ----------
+const X0=120,CS=34,GAP=28,Y0=140,RS=32,VY=22,PY=62;
+const colX=j=>X0+j*CS+Math.floor(j/tile)*GAP+CS/2;
+const rowY=r=>Y0+r*RS;
+const nodeX=t=>colX(Math.min((t+1)*tile,n)-1)+CS/2+GAP/2;
+const accX=nodeX(nt-1)+50, BX=accX+76, FX=accX+104, CY=rowY(n-1)+62;
+svg.setAttribute("width",FX+30); svg.setAttribute("height",CY+50);
+
+txt(8,VY+4,"VECTOR REG",{"text-anchor":"start","font-size":9});
+txt(8,PY+15,"PWM TIMERS",{"text-anchor":"start","font-size":9});
+txt(colX(0)-CS/2,Y0-31,"ANALOG CELL ARRAY (switch × DAC code)",{"text-anchor":"start","font-size":9});
+txt(colX(0)-CS/2,Y0-20,"squares = tile summing nodes → ADC",{"text-anchor":"start","font-size":9});
+txt(14,Y0-20,"WEIGHT SHIFT REGS",{"text-anchor":"start","font-size":9});
+txt(accX+32,Y0-20,"ACCUMULATE",{"font-size":9});
+
+const vl=[],cl=[],vb=[],vt=[],dt=[],pb=[];
+for(let j=0;j<n;j++){
+ vl[j]=el("line",{x1:colX(j),y1:VY+14,x2:colX(j),y2:PY,stroke:IDLE,"stroke-width":1});
+ cl[j]=el("line",{x1:colX(j),y1:PY+22,x2:colX(j),y2:rowY(n-1)+12,stroke:IDLE,"stroke-width":1});
+}
+const rw=[],aw=[],ce=[],nd=[],ndt=[],wsr=[],wl=[],ar=[],at=[],sb=[];
+for(let r=0;r<n;r++){
+ rw[r]=[];aw[r]=[];ce[r]=[];nd[r]=[];ndt[r]=[];
+ wl[r]=el("line",{x1:96,y1:rowY(r),x2:colX(0)-CS/2,y2:rowY(r),stroke:IDLE,"stroke-width":1});
+ for(let t=0;t<nt;t++){
+  rw[r][t]=el("line",{x1:colX(t*tile)-CS/2,y1:rowY(r),x2:nodeX(t),y2:rowY(r),stroke:IDLE,"stroke-width":1});
+  aw[r][t]=el("path",{d:"M"+nodeX(t)+","+(rowY(r)+7)+"V"+(rowY(r)+9+2*t)+"H"+accX,fill:"none",stroke:IDLE,"stroke-width":1});
+ }
+ sb[r]=el("line",{x1:accX+64,y1:rowY(r),x2:BX,y2:rowY(r),stroke:IDLE,"stroke-width":1});
+}
+const bus=el("path",{d:"M"+BX+","+rowY(0)+"V"+CY+"H"+(accX+64),fill:"none",stroke:IDLE,"stroke-width":1});
+const fb=el("path",{d:"M"+(accX+64)+","+(CY+10)+"H"+FX+"V"+VY+"H"+(colX(n-1)+15),fill:"none",stroke:IDLE,"stroke-width":1});
+for(let j=0;j<n;j++){
+ vb[j]=el("rect",{x:colX(j)-15,y:VY-12,width:30,height:26,rx:3,fill:BOX,stroke:IDLE});
+ vt[j]=txt(colX(j),VY+4,"",{fill:"#fff","font-size":9});
+ dt[j]=txt(colX(j)+9,PY+36,"",{"font-size":8});
+}
+for(let t=0;t<nt;t++){
+ const f=t*tile,l=Math.min((t+1)*tile,n)-1;
+ pb[t]=el("rect",{x:colX(f)-15,y:PY,width:colX(l)-colX(f)+30,height:22,rx:3,fill:BOX,stroke:IDLE});
+ txt((colX(f)+colX(l))/2,PY+15,"PWM tile "+t);
+}
+for(let r=0;r<n;r++){
+ for(let j=0;j<n;j++) ce[r][j]=el("circle",{cx:colX(j),cy:rowY(r),r:7,fill:BLUE,"fill-opacity":0.02,stroke:IDLE,"stroke-width":1});
+ for(let t=0;t<nt;t++){
+  nd[r][t]=el("rect",{x:nodeX(t)-11,y:rowY(r)-7,width:22,height:14,rx:3,fill:BOX,stroke:IDLE});
+  ndt[r][t]=txt(nodeX(t),rowY(r)+3,"",{"font-size":8,fill:"#fff"});
+ }
+ wsr[r]=el("rect",{x:14,y:rowY(r)-9,width:82,height:18,rx:3,fill:BOX,stroke:IDLE});
+ txt(55,rowY(r)+4,"WSR row "+r);
+ ar[r]=el("rect",{x:accX,y:rowY(r)-10,width:64,height:20,rx:3,fill:BOX,stroke:IDLE});
+ at[r]=txt(accX+32,rowY(r)+4,"",{fill:"#fff"});
+}
+const ctrlW=accX+64-X0;
+const ctrl=el("rect",{x:X0,y:CY-18,width:ctrlW,height:46,rx:4,fill:BOX,stroke:IDLE});
+txt(X0+ctrlW/2,CY,"DIGITAL CONTROLLER: combine (+/−) · Gram-Schmidt · normalise · converged?",{fill:"#fff","font-size":10});
+const ctrlT2=txt(X0+ctrlW/2,CY+16,"",{fill:PUR,"font-size":11});
+
+// ---------- molecule panel ----------
+const msvg=document.getElementById("mol");
+const xs=M.coords.map(c=>c[0]),ys=M.coords.map(c=>c[1]);
+const minx=Math.min(...xs),maxx=Math.max(...xs),miny=Math.min(...ys),maxy=Math.max(...ys);
+const sc=Math.min(240/Math.max(maxx-minx,0.01),170/Math.max(maxy-miny,0.01),80);
+const ax=i=>150+(M.coords[i][0]-(minx+maxx)/2)*sc, ay=i=>125-(M.coords[i][1]-(miny+maxy)/2)*sc;
+txt(150,14,"orbital amplitude on each atom (blue +, red −)",{},msvg);
+M.edges.forEach(e=>el("line",{x1:ax(e[0]),y1:ay(e[0]),x2:ax(e[1]),y2:ay(e[1]),stroke:"#4a5568","stroke-width":2},msvg));
+const atoms=M.coords.map((c,i)=>el("circle",{cx:ax(i),cy:ay(i),r:7,fill:"none",stroke:"#6b7686"},msvg));
+M.coords.forEach((c,i)=>txt(ax(i),ay(i)+3,String(i),{"font-size":9,fill:"#fff"},msvg));
+function updateMol(vec){
+ const mx=vec?Math.max(...vec.map(Math.abs))||1:1;
+ atoms.forEach((a,i)=>{
+  if(!vec){S(a,{r:7,fill:"none"});return;}
+  S(a,{r:5+17*Math.abs(vec[i])/mx,fill:vec[i]>=0?BLUE:RED,"fill-opacity":0.8});
+ });
+}
+
+// ---------- level + convergence plots ----------
+const dupIdx=M.exact.map((x,i)=>M.exact.slice(0,i).filter(y=>Math.abs(y-x)<1e-6).length);
+function drawLevels(done){
+ const c=document.getElementById("levels"),g=c.getContext("2d"),W=c.width,H=c.height;
+ g.clearRect(0,0,W,H);g.fillStyle=TXT;g.font="11px Segoe UI";
+ g.fillText("π levels: E−α in units of |β| (dashed = exact)",8,14);
+ const ex=M.exact.map(x=>-x),lo=Math.min(...ex)-0.4,hi=Math.max(...ex)+0.4;
+ const Y=e=>H-12-(e-lo)/(hi-lo)*(H-40);
+ ex.forEach((e,i)=>{
+  const x0=40+dupIdx[i]*60;
+  g.strokeStyle="#4a5568";g.setLineDash([4,3]);g.beginPath();g.moveTo(x0,Y(e));g.lineTo(x0+50,Y(e));g.stroke();g.setLineDash([]);
+  if(dupIdx[i]===0){g.fillStyle=TXT;g.fillText(e.toFixed(3),4,Y(e)+4);}
+ });
+ done.forEach(d=>{
+  const e=-d.x_analog,x0=40+dupIdx[d.orb]*60;
+  g.strokeStyle=GREEN;g.lineWidth=3;g.beginPath();g.moveTo(x0,Y(e));g.lineTo(x0+50,Y(e));g.stroke();g.lineWidth=1;
+  g.fillStyle="#fff";g.fillText("↑↓",x0+17,Y(e)-5);
+  g.fillStyle=GREEN;g.fillText("x="+d.x_analog.toFixed(3),x0+(dupIdx[d.orb]?0:0),Y(e)+14);
+ });
+}
+function drawConv(pts){
+ const c=document.getElementById("conv"),g=c.getContext("2d"),W=c.width,H=c.height;
+ g.clearRect(0,0,W,H);g.fillStyle=TXT;g.font="11px Segoe UI";
+ g.fillText("convergence: log10(Δ vector) per iteration",8,14);
+ const lo=-3,hi=0.5,Y=v=>H-14-(Math.log10(Math.max(v,1e-6))-lo)/(hi-lo)*(H-36);
+ g.strokeStyle="#4a5568";g.setLineDash([4,3]);g.beginPath();g.moveTo(8,Y(M.cfg.tol));g.lineTo(W-8,Y(M.cfg.tol));g.stroke();g.setLineDash([]);
+ g.fillText("tol",W-30,Y(M.cfg.tol)-3);
+ const xm=Math.max(20,pts.length);
+ g.strokeStyle=ORG;g.beginPath();
+ pts.forEach((p,i)=>{const x=8+i/(xm-1)*(W-16),y=Y(p);if(i)g.lineTo(x,y);else g.moveTo(x,y);});g.stroke();
+}
+
+// ---------- timeline ----------
+const steps=[];
+EV.forEach((e,i)=>{ if(e.t==="iter") for(let s=0;s<12;s++) steps.push({i:i,s:s}); else steps.push({i:i,s:0}); });
+const LOGL=EV.map(e=>{
+ if(e.t==="load") return "load row "+e.row+"  words "+e.words.join(" ")+"  ("+e.cycles+" clocks)";
+ if(e.t==="iter") return "orbital "+e.orb+" iter "+e.it+":  Δ="+e.change.toFixed(4)+"  x≈"+e.lam_x.toFixed(4)+"  hw time "+(e.t_us/1000).toFixed(1)+" ms";
+ return "ORBITAL "+e.orb+" DONE  analog x="+e.x_analog.toFixed(4)+"  refined="+e.x_refined.toFixed(4)+"  exact="+e.x_exact.toFixed(4)+"  ("+e.iters+" iters)";
+});
+function stageDesc(ev,s){
+ if(s===0) return "DIGITAL — vector register splits v into v⁺ and v⁻ (PWM duty cannot be negative)";
+ if(s===11) return "DIGITAL — y = y⁺ − y⁻, Gram-Schmidt against found orbitals, normalise, check convergence";
+ const P=ev.passes[Math.floor((s-1)/5)],g=P.sign==="+"?"v⁺":"v⁻",sub=(s-1)%5;
+ return ["PWM TIMERS — duty codes for "+g+" (255-clock period)",
+  "ANALOG — each cell's switch gates its DAC voltage: product = weight × duty (line width ∝ product)",
+  "ANALOG — products add at each 4-input summing node and settle (RC average)",
+  "ADC — each tile node is digitised (number = ADC code)",
+  "DIGITAL — tile codes accumulate into row sums ("+g+" pass)"][sub];
+}
+
+function render(k){
+ const st=steps[k],ev=EV[st.i];
+ vl.forEach(e=>S(e,{stroke:IDLE,"stroke-width":1}));cl.forEach(e=>S(e,{stroke:IDLE,"stroke-width":1}));
+ vb.forEach(e=>S(e,{stroke:IDLE}));vt.forEach(e=>e.textContent="");dt.forEach(e=>e.textContent="");
+ pb.forEach(e=>S(e,{stroke:IDLE,fill:BOX}));
+ let loaded=-1;for(let i=0;i<=st.i;i++) if(EV[i].t==="load") loaded=EV[i].row;
+ for(let r=0;r<n;r++){
+  S(wsr[r],{stroke:IDLE,fill:BOX});S(wl[r],{stroke:IDLE,"stroke-width":1});
+  S(ar[r],{stroke:IDLE,fill:BOX});at[r].textContent="";S(sb[r],{stroke:IDLE,"stroke-width":1});
+  for(let j=0;j<n;j++) S(ce[r][j],{"fill-opacity":r<=loaded?0.06+0.55*M.wcode[r][j]/M.wl:0.02,stroke:IDLE,"stroke-width":1});
+  for(let t=0;t<nt;t++){S(rw[r][t],{stroke:IDLE,"stroke-width":1});S(aw[r][t],{stroke:IDLE,"stroke-width":1});S(nd[r][t],{stroke:IDLE,fill:BOX});ndt[r][t].textContent="";}
+ }
+ S(bus,{stroke:IDLE,"stroke-width":1});S(fb,{stroke:IDLE,"stroke-width":1});S(ctrl,{stroke:IDLE,fill:BOX});ctrlT2.textContent="";
+
+ let vec=null,desc="",hw=0,orb=-1;
+ if(ev.t==="load"){
+  const r=ev.row;
+  S(wsr[r],{stroke:BLUE,fill:"#1c3a5e"});S(wl[r],{stroke:BLUE,"stroke-width":4});
+  for(let j=0;j<n;j++) S(ce[r][j],{stroke:BLUE,"stroke-width":2});
+  desc="WEIGHT LOAD — row "+r+": one 32-bit shift register per tile clocks in "+ev.words.join(" , ")+" ({w4,w3,w2,w1}, as in mac_ctrl.v)";
+ } else if(ev.t==="done"){
+  vec=ev.vec;orb=ev.orb;hw=ev.t_us;
+  desc="ORBITAL "+ev.orb+" converged after "+ev.iters+" iterations: analog x = "+ev.x_analog.toFixed(4)+", refined = "+ev.x_refined.toFixed(4)+", exact = "+ev.x_exact.toFixed(4);
+ } else {
+  orb=ev.orb;hw=ev.t_us;const s=st.s;vec=ev.v;desc=stageDesc(ev,s);
+  if(s===0){
+   for(let j=0;j<n;j++){S(vl[j],{stroke:BLUE,"stroke-width":1+5*Math.abs(ev.v[j])/ev.vmax});S(vb[j],{stroke:BLUE});}
+  } else if(s<=10){
+   const pi=Math.floor((s-1)/5),sub=(s-1)%5,P=ev.passes[pi],col=P.sign==="+"?GREEN:RED;
+   if(sub<=2) for(let j=0;j<n;j++){
+    S(cl[j],{stroke:col,"stroke-width":1+6*P.duty[j]/M.dmax});
+    dt[j].textContent=P.duty[j];
+   }
+   if(sub===0) pb.forEach(e=>S(e,{stroke:BLUE,fill:"#1c3a5e"}));
+   if(sub===1||sub===2) for(let r=0;r<n;r++)for(let j=0;j<n;j++){
+    const p=P.prod[r][j]; if(p>0.002) S(ce[r][j],{stroke:col,"stroke-width":0.8+8*p});
+   }
+   if(sub===2) for(let r=0;r<n;r++)for(let t=0;t<nt;t++){
+    const a=Math.abs(P.node[r][t]);
+    S(rw[r][t],{stroke:col,"stroke-width":1+4*Math.min(1,a/M.fs)});
+    S(nd[r][t],{stroke:col,fill:"#143524"});ndt[r][t].textContent=P.node[r][t].toFixed(2);
+   }
+   if(sub>=3) for(let r=0;r<n;r++)for(let t=0;t<nt;t++){
+    const a=Math.abs(P.code[r][t])/M.top;
+    S(nd[r][t],{stroke:ORG,fill:"#3a2a10"});ndt[r][t].textContent=P.code[r][t];
+    S(aw[r][t],{stroke:ORG,"stroke-width":1+4*Math.min(1,a)});
+   }
+   if(sub===4) for(let r=0;r<n;r++){S(ar[r],{stroke:BLUE,fill:"#1c3a5e"});at[r].textContent=P.rowsum[r].toFixed(3);}
+  } else {
+   vec=ev.vn;
+   S(ctrl,{stroke:PUR,fill:"#2a1f45"});S(bus,{stroke:PUR,"stroke-width":3});S(fb,{stroke:PUR,"stroke-width":3});
+   for(let r=0;r<n;r++){S(ar[r],{stroke:PUR,fill:"#2a1f45"});at[r].textContent=ev.y[r].toFixed(3);S(sb[r],{stroke:PUR,"stroke-width":1+3*Math.abs(ev.y[r])/(M.wscale*2)});}
+   for(let j=0;j<n;j++) S(vb[j],{stroke:PUR});
+   ctrlT2.textContent="Δ = "+ev.change.toFixed(4)+"     x ≈ "+ev.lam_x.toFixed(3);
+  }
+ }
+ if(vec) for(let j=0;j<n;j++) vt[j].textContent=vec[j].toFixed(2);
+ updateMol(vec);
+
+ const done=[];for(let i=0;i<=st.i;i++) if(EV[i].t==="done") done.push(EV[i]);
+ drawLevels(done);
+ const pts=[];for(let i=0;i<=st.i;i++) if(EV[i].t==="iter"&&EV[i].orb===orb) pts.push(EV[i].change);
+ drawConv(pts);
+
+ document.getElementById("status").innerHTML="<b>"+(orb>=0?"orbital "+orb:"initialisation")+(ev.t==="iter"?" · iteration "+ev.it:"")+"</b> · estimated analog hardware time "+(hw/1000).toFixed(1)+" ms<br>"+desc;
+ const lines=[];
+ for(let i=0;i<=st.i;i++){const comp=(i<st.i)||(EV[i].t!=="iter")||st.s===11;if(comp) lines.push(LOGL[i]);}
+ const lg=document.getElementById("log");lg.textContent=lines.slice(-14).join("\n");lg.scrollTop=lg.scrollHeight;
+ document.getElementById("scrub").value=k;
+}
+
+// ---------- result table ----------
+(function(){
+ const R=T.result;let h="<tr><th>orbital</th><th>exact x</th><th>analog x</th><th>analog err</th><th>refined x</th><th>refined err</th><th>iters</th></tr>";
+ R.orbitals.forEach(o=>{h+="<tr><td>"+o.k+"</td><td>"+o.x_exact.toFixed(4)+"</td><td>"+o.x_analog.toFixed(4)+"</td><td>"+(o.x_analog-o.x_exact).toExponential(1)+"</td><td>"+o.x_refined.toFixed(4)+"</td><td>"+(o.x_refined-o.x_exact).toExponential(1)+"</td><td>"+o.iters+"</td></tr>";});
+ h+="<tr><td>total π E (β units)</td><td>"+R.E_exact.toFixed(4)+"</td><td>"+R.E_analog.toFixed(4)+"</td><td>"+(R.E_analog-R.E_exact).toExponential(1)+"</td><td>"+R.E_refined.toFixed(4)+"</td><td>"+(R.E_refined-R.E_exact).toExponential(1)+"</td><td></td></tr>";
+ document.getElementById("result").innerHTML=h;
+})();
+
+// ---------- playback ----------
+let idx=0,playing=false,timer=null;
+const btn=document.getElementById("play"),modeSel=document.getElementById("mode"),speed=document.getElementById("speed"),scrub=document.getElementById("scrub");
+scrub.max=steps.length-1;
+function advance(){
+ if(idx>=steps.length-1) return false;
+ idx++;
+ if(modeSel.value==="iter") while(idx<steps.length-1&&EV[steps[idx].i].t==="iter"&&steps[idx].s!==11) idx++;
+ return true;
+}
+function pause(){playing=false;clearTimeout(timer);btn.textContent="▶ Play";}
+function loop(){if(!playing)return;if(!advance()){pause();return;}render(idx);timer=setTimeout(loop,+speed.value);}
+function toggle(){if(playing){pause();return;}if(idx>=steps.length-1)idx=0;playing=true;btn.textContent="⏸ Pause";render(idx);timer=setTimeout(loop,+speed.value);}
+btn.onclick=toggle;
+document.getElementById("fwd").onclick=()=>{pause();if(advance())render(idx);};
+document.getElementById("back").onclick=()=>{pause();if(idx>0)idx--;render(idx);};
+document.getElementById("nextorb").onclick=()=>{pause();for(let i=idx+1;i<steps.length;i++){if(EV[steps[i].i].t==="done"){idx=i;break;}}render(idx);};
+speed.oninput=()=>{document.getElementById("spv").textContent=speed.value;};
+scrub.oninput=()=>{pause();idx=+scrub.value;render(idx);};
+document.addEventListener("keydown",e=>{if(e.code==="Space"){e.preventDefault();toggle();}});
+render(0);
+</script></body></html>

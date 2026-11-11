@@ -1,0 +1,7 @@
+sim/
+__pycache__/
+*.raw
+*.db
+*.jou
+*.pb
+dashboard.html

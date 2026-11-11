@@ -1,0 +1,38 @@
+* auto-generated, pass sequence ABABABAB
+.param Vdd=5 Ron=80
+.model SWM SW(Ron={Ron} Roff=1G Vt={Vdd/2} Vh=0.1)
+.subckt MULT vw pwm out
+Bpwmb pwmb 0 V={Vdd}-V(pwm)
+S1 vw  out pwm  0 SWM
+S2 out 0   pwmb 0 SWM
+.ends
+Vw1 vw1 0 0.8
+Vp1 pwm1 0 PWL file=pwm1_ABABABAB.txt
+X1 vw1 pwm1 s1 MULT
+R1 s1 out 10k
+Vw2 vw2 0 0.5
+Vp2 pwm2 0 PWL file=pwm2_ABABABAB.txt
+X2 vw2 pwm2 s2 MULT
+R2 s2 out 10k
+Vw3 vw3 0 0.3
+Vp3 pwm3 0 PWL file=pwm3_ABABABAB.txt
+X3 vw3 pwm3 s3 MULT
+R3 s3 out 10k
+Vw4 vw4 0 0.9
+Vp4 pwm4 0 PWL file=pwm4_ABABABAB.txt
+X4 vw4 pwm4 s4 MULT
+R4 s4 out 10k
+Cf out 0 100n
+Rl out 0 1Meg
+.options reltol=1e-5 vntol=1e-9 abstol=1e-12 numdgt=10
+.tran 0 1.623840000e-02 0 20n
+.save V(out)
+.meas TRAN m0 FIND V(out) AT=2.020920000e-03
+.meas TRAN m1 FIND V(out) AT=4.050720000e-03
+.meas TRAN m2 FIND V(out) AT=6.080520000e-03
+.meas TRAN m3 FIND V(out) AT=8.110320000e-03
+.meas TRAN m4 FIND V(out) AT=1.014012000e-02
+.meas TRAN m5 FIND V(out) AT=1.216992000e-02
+.meas TRAN m6 FIND V(out) AT=1.419972000e-02
+.meas TRAN m7 FIND V(out) AT=1.622952000e-02
+.end

@@ -17,6 +17,8 @@ python mol_engine.py benzene        # runs the model, writes dashboard.html
 ```
 Molecules: `ethylene`, `butadiene`, `benzene`, `naphthalene`. Open `dashboard.html` in a browser. It has three tabs: the simulation replay, a guide with the run summary, and a prototype build plan. There is a dark/light toggle.
 
+After running, a new file dashboard.html will be generated. Open it to see the interactive dashboard.
+
 ## Tests
 ```powershell
 python test_mol_engine.py           # 17 tests; add --fast to skip the slow one

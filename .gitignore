@@ -1,7 +1,11 @@
 sim/
 __pycache__/
+xsim.dir/
+xelab.*
+xvlog.*
+xsim*
+dfx_runtime.txt
 *.raw
 *.db
 *.jou
 *.pb
-dashboard.html

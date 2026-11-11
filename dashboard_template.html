@@ -2,128 +2,336 @@
 <html lang="en"><head><meta charset="utf-8">
 <title>Hybrid analog MAC - molecule dashboard</title>
 <style>
- body{margin:0;background:#0d1117;color:#d6deeb;font-family:Segoe UI,Arial,sans-serif}
- #bar{padding:8px 12px;background:#161b22;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
- button,select{background:#21262d;color:#d6deeb;border:1px solid #444c56;border-radius:6px;padding:5px 10px;cursor:pointer}
- #legend{padding:4px 12px;font-size:12px}
+ :root{--bg:#0d1117;--fg:#d6deeb;--bar:#161b22;--panel:#10151d;--line:#2a313c;--btn:#21262d;--btnb:#444c56;--mut:#8b96a5}
+ body.light{--bg:#eef1f5;--fg:#1f2933;--bar:#e1e6ed;--panel:#ffffff;--line:#c5ccd6;--btn:#ffffff;--btnb:#aab3c0;--mut:#5b6675}
+ body{margin:0;background:var(--bg);color:var(--fg);font-family:Segoe UI,Arial,sans-serif}
+ #bar{padding:8px 12px;background:var(--bar);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+ button,select{background:var(--btn);color:var(--fg);border:1px solid var(--btnb);border-radius:6px;padding:5px 10px;cursor:pointer}
+ button.on{border-color:#4fa3ff;font-weight:600}
+ #legend{padding:4px 12px;font-size:12px;line-height:1.5}
+ #pipe{display:flex;flex-wrap:wrap;gap:6px;padding:4px 12px 2px}
+ .chip{font-size:12px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;color:var(--mut);background:var(--panel)}
  #wrap{display:flex;gap:12px;padding:10px;align-items:flex-start;flex-wrap:wrap}
+ #left{display:flex;flex-direction:column;gap:8px}
+ #left table{margin:0;width:100%;background:var(--panel)}
  #side{display:flex;flex-direction:column;gap:8px}
- canvas,#mol,#arch{background:#10151d;border:1px solid #2a313c;border-radius:6px}
+ canvas,#mol,#arch,#gallery{background:var(--panel);border:1px solid var(--line);border-radius:6px}
  #right{width:440px;display:flex;flex-direction:column;gap:8px}
  #status{font-size:14px;min-height:70px}
- #log{margin:0;padding:8px;background:#10151d;border:1px solid #2a313c;border-radius:6px;font-size:12px;height:340px;overflow:auto;white-space:pre-wrap}
+ #log{margin:0;padding:8px;background:var(--panel);border:1px solid var(--line);border-radius:6px;font-size:12px;height:340px;overflow:auto;white-space:pre-wrap}
  table{border-collapse:collapse;margin:10px 12px;font-size:13px}
- td,th{border:1px solid #2a313c;padding:3px 10px;text-align:right}
+ td,th{border:1px solid var(--line);padding:3px 9px;text-align:right}
+ tr:last-child td{font-weight:600}
+ .flow{stroke-dasharray:4 4;animation:fl .8s linear infinite}
+ @keyframes fl{to{stroke-dashoffset:-8}}
+ @media (prefers-reduced-motion:reduce){.flow{animation:none}}
+ #guide{display:none;max-width:1000px;padding:10px 16px}
+ #guide h2{margin:18px 0 6px;font-size:18px}
+ .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+ .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.45}
+ .card b{display:block;margin-bottom:3px;font-size:14px}
+ .big{font-size:22px;font-weight:600}
+ .mut{color:var(--mut)}
 </style></head><body>
 <div id="bar">
  <b id="title"></b>
+ <button id="tabsim" class="on">Simulation</button><button id="tabguide">Guide &amp; summary</button>
+ <button id="tabproto">Prototype build</button>
+ <span id="ctl" style="display:contents">
  <button id="play">▶ Play</button><button id="back">◀ Step</button><button id="fwd">Step ▶</button>
  <select id="mode"><option value="stage">every stage</option><option value="iter">one frame per iteration</option></select>
  <label>delay <input id="speed" type="range" min="20" max="1000" value="250"> <span id="spv">250</span> ms</label>
  <button id="nextorb">Next orbital ⏭</button>
  <input id="scrub" type="range" min="0" value="0" style="width:240px">
+ </span>
+ <button id="theme"></button>
 </div>
-<div id="legend">
- <span style="color:#4fa3ff">■ digital / weight load</span>
- <span style="color:#3fe08a">■ analog, v⁺ pass</span>
- <span style="color:#ff6b81">■ analog, v⁻ pass</span>
- <span style="color:#ffb454">■ ADC</span>
- <span style="color:#c792ea">■ controller</span>
- &nbsp; line width = signal size
-</div>
-<div id="wrap"><svg id="arch"></svg>
- <div id="side"><svg id="mol" width="300" height="240"></svg>
-  <canvas id="levels" width="300" height="230"></canvas>
-  <canvas id="conv" width="300" height="150"></canvas></div>
-<div id="right"><div id="status"></div><pre id="log"></pre></div></div>
-<div id="status"></div>
-<pre id="log"></pre>
-<table id="result"></table>
 
+<div id="simview">
+<div id="legend"></div>
+<div id="pipe"></div>
+<div id="wrap">
+ <div id="left"><svg id="arch"></svg>
+  <div class="mut" style="font-size:13px">Result of this run</div>
+  <table id="result"></table></div>
+ <div id="side"><svg id="mol" width="330" height="300"></svg>
+  <svg id="gallery"></svg>
+  <canvas id="levels" width="330" height="230"></canvas>
+  <canvas id="conv" width="330" height="150"></canvas></div>
+ <div id="right"><div id="status"></div><pre id="log"></pre></div></div>
+</div>
+
+<div id="guide">
+ <h2>Result of this run</h2>
+ <div class="cards" id="sumcards"></div>
+ <p class="mut" id="sumnote"></p>
+
+ <h2>What each part of the circuit does</h2>
+ <div class="cards">
+  <div class="card"><b>Activation vector (VECTOR REG)</b>The current guess v for the orbital: one number per atom. PWM duty cannot be negative, so the controller splits v into a positive part v⁺ and a negative part v⁻ and runs them as two separate passes.</div>
+  <div class="card"><b>PWM timers</b>Turn each number into a duty cycle: a 255-clock square wave that is high for D clocks. Larger |v| gives a wider pulse (the small waveform under each timer shows it). One timer group per 4-input tile.</div>
+  <div class="card"><b>Weight shift registers and DAC</b>The Hückel adjacency matrix A (1 = bonded atoms) is stored as 8-bit codes, loaded 32 bits at a time per tile, MSB first. A DAC turns each code into a fixed voltage.</div>
+  <div class="card"><b>Analog cell array (switches)</b>Each cell is a switch that connects its DAC voltage to the wire only while its PWM is high. Averaged over time that gives voltage × duty = weight × activation, so one cell is one multiplier. The lever closes when the cell is conducting.</div>
+  <div class="card"><b>Σ summing node and RC filter</b>Four cells share one node through resistors and a capacitor. The node adds their products and smooths out the PWM ripple. It needs about 8 time constants (≈2 ms) to settle, which sets the speed of the whole machine.</div>
+  <div class="card"><b>ADC</b>Digitises each tile's node voltage into a signed code. Quantisation and read noise enter here.</div>
+  <div class="card"><b>Accumulate (outputs)</b>Digital adders sum a row's tile codes into one output y<sub>r</sub> = Σ A<sub>rj</sub>·v<sub>j</sub>. All rows together are one matrix-vector product.</div>
+  <div class="card"><b>Digital controller</b>Combines y⁺ − y⁻, adds the shift s·v digitally, removes orbitals already found (Gram-Schmidt), normalises, and checks whether the vector has stopped changing (Δ below the tolerance). The result feeds back as the next v.</div>
+ </div>
+
+ <h2>What the side panels show</h2>
+ <div class="cards">
+  <div class="card"><b>Stage strip</b>The chips above the circuit show which of the eight stages is active right now. Moving dashes on a wire mean that wire is carrying signal in that stage.</div>
+  <div class="card"><b>Molecule</b>Each carbon carries one amplitude of the current orbital estimate. Blue = positive, red = negative, size = |amplitude|. A green bond means the two neighbours are in phase (bonding); a red dashed bond means out of phase. More out-of-phase bonds means a higher-energy orbital.</div>
+  <div class="card"><b>Finished orbitals</b>A thumbnail of each converged orbital with its analog x. Each holds two electrons (↑↓).</div>
+  <div class="card"><b>π levels</b>Energy ladder in units of |β|. Dashed = exact level, green = level found by the analog machine. Energy is α + xβ with β negative, so larger x means lower energy.</div>
+  <div class="card"><b>Convergence</b>log10 of how far the vector moved in each iteration. The orbital is finished when it falls below the dashed tolerance line.</div>
+ </div>
+
+ <h2>How to read the numbers</h2>
+ <div class="cards">
+  <div class="card"><b>Analog x vs refined x</b>Analog x is the eigenvalue estimate read from the analog passes, so it carries gain mismatch, ADC and noise error. Refined x recomputes the Rayleigh quotient digitally on the same final vector. It stays accurate (about 1e-4) even when the analog value is off, which shows the vector itself is good.</div>
+  <div class="card"><b>Shift s</b>The array holds A. The digital side adds s·v so the iteration converges on the occupied (largest) orbitals. Doing this digitally, not in the array, cut the benzene error about 2.8×.</div>
+  <div class="card"><b>What this is not</b>A classical hybrid analog-digital simulation of a toy Hamiltonian, not quantum hardware and not chemical accuracy. Offset and noise sizes are placeholders; only the 1.7 % gain mismatch comes from the paper. Python models every row and tile as a parallel analog node, while the Verilog FSM drives one tile at a time.</div>
+ </div>
+</div>
+<div id="proto" style="display:none;max-width:1040px;padding:10px 16px">
+ <h2 style="margin:10px 0 6px;font-size:18px">Prototype: one tile on an FPGA board, controlled from a PC</h2>
+ <p class="mut" style="font-size:13px;margin:0 0 8px">Matches the simulated chain: shift register → DAC → PWM-gated switches → Rf/Cf summing node → ADC. The Verilog in <code>mac_ctrl.v</code> / <code>mac_fsm.v</code> is reused; the DAC driver, XADC wrapper and UART are new.</p>
+ <svg id="psvg" width="1000" height="400" style="background:var(--panel);border:1px solid var(--line);border-radius:6px;max-width:100%"></svg>
+
+ <h2 style="margin:18px 0 6px;font-size:18px">Parts (starting points, check datasheets)</h2>
+ <table style="margin:0;background:var(--panel)">
+  <tr><th style="text-align:left">Block</th><th style="text-align:left">Option</th><th style="text-align:left">Why / catch</th></tr>
+  <tr><td style="text-align:left">Digital core</td><td style="text-align:left">Digilent Basys 3 (Artix-7)</td><td style="text-align:left">Already your Vivado target; 100 MHz clock, XADC inputs on the JXADC header</td></tr>
+  <tr><td style="text-align:left">Weight DAC</td><td style="text-align:left">Quad DAC breakout, e.g. MCP4728 (12-bit, I²C)</td><td style="text-align:left">One chip covers the 4 cells of a tile. Use the top 8 bits to match the model's 8-bit codes. Weights are DC, so speed doesn't matter</td></tr>
+  <tr><td style="text-align:left">Analog switches</td><td style="text-align:left">SPDT analog switches rated for 3.3 V, e.g. ADG1236 or 74HC4053 class</td><td style="text-align:left">Model uses Ron = 80 Ω. Real Ron varies with signal voltage, which is a new error source the simulation doesn't have</td></tr>
+  <tr><td style="text-align:left">Summing node</td><td style="text-align:left">4 × 10 kΩ 0.1 % into 100 nF (C0G/film), 1 MΩ load</td><td style="text-align:left">τ ≈ 252 µs as in the netlist. Avoid X7R: its capacitance shifts with voltage</td></tr>
+  <tr><td style="text-align:left">Buffer</td><td style="text-align:left">Rail-to-rail op-amp follower</td><td style="text-align:left">The node impedance is about 2.5 kΩ, which is high for an ADC input. The buffer adds its own offset</td></tr>
+  <tr><td style="text-align:left">ADC</td><td style="text-align:left">Basys 3 XADC (12-bit, 0–1 V), or a Pmod ADC</td><td style="text-align:left">XADC is unipolar and 0–1 V, so keep weight voltages at or below about 1 V. Hardware passes are always non-negative (v⁺ and v⁻ run separately), so the model's signed ADC is not needed</td></tr>
+  <tr><td style="text-align:left">Host link</td><td style="text-align:left">USB-UART on the board + a Python script</td><td style="text-align:left">The script reuses the <code>mol_engine.py</code> controller code, with the analog pass replaced by a UART call</td></tr>
+ </table>
+
+ <h2 style="margin:18px 0 6px;font-size:18px">Build order</h2>
+ <div class="cards">
+  <div class="card"><b>1. Analog bench</b>Breadboard one tile: DAC, switches, 4 × Rf, Cf. Drive the switches from the FPGA with the existing <code>mac_ctrl</code> PWM. Check the settled node voltage against your SPICE result (about 0.27 V for your test weights).</div>
+  <div class="card"><b>2. Read it</b>Add an XADC wrapper and a UART. Confirm that pass A and pass B differ by the predicted amount, and that the read repeats to a few LSB.</div>
+  <div class="card"><b>3. Close the loop</b>Run <code>mac_fsm</code> jobs from the PC for one matvec, then a full benzene run. Compare the energy error to the Python error budget.</div>
+  <div class="card"><b>4. Scale up</b>Only after 1–3 work: several tiles in parallel, a PCB, or a SKY130 version.</div>
+ </div>
+
+ <h2 style="margin:18px 0 6px;font-size:18px">Things that will bite</h2>
+ <div class="cards">
+  <div class="card"><b>Switch dead time</b>The netlist drives S1 and S2 with ideal complementary pulses. Real switches can overlap for a few ns and short the DAC to ground through two Ron. The FPGA must generate a gap between PWM and its complement. <code>mac_ctrl.v</code> has none today.</div>
+  <div class="card"><b>DAC update path is new</b><code>mac_fsm</code> exposes <code>weights_dac</code> (32 bits) but nothing yet turns it into I²C or SPI traffic. That driver is new Verilog and needs its own testbench.</div>
+  <div class="card"><b>Placeholders become real</b>Offset and noise in the model are guesses. On hardware they are measured: switch charge injection, buffer offset, XADC noise. The first bench result replaces them.</div>
+  <div class="card"><b>Repeated reads</b>The FSM reads in consecutive PWM periods, about 10 µs apart on a 252 µs filter, so the noise samples are probably correlated. Averaging helps less on hardware than the model assumes.</div>
+  <div class="card"><b>Clock</b>Run the design from 25 MHz (10.2 µs PWM period, 198 settle periods) as the handoff proposes. At 100 MHz you need 791 settle periods.</div>
+ </div>
+</div>
+
+<div id="proto" style="display:none;max-width:1040px;padding:10px 16px">
+ <h2 style="margin:10px 0 6px;font-size:18px">Prototype: one tile on an FPGA board, controlled from a PC</h2>
+ <p class="mut" style="font-size:13px;margin:0 0 8px">Matches the simulated chain: shift register → DAC → PWM-gated switches → Rf/Cf summing node → ADC. The Verilog in <code>mac_ctrl.v</code> / <code>mac_fsm.v</code> is reused; the DAC driver, XADC wrapper and UART are new.</p>
+ <svg id="psvg" width="1000" height="400" style="background:var(--panel);border:1px solid var(--line);border-radius:6px;max-width:100%"></svg>
+
+ <h2 style="margin:18px 0 6px;font-size:18px">Parts (starting points, check datasheets)</h2>
+ <table style="margin:0;background:var(--panel)">
+  <tr><th style="text-align:left">Block</th><th style="text-align:left">Option</th><th style="text-align:left">Why / catch</th></tr>
+  <tr><td style="text-align:left">Digital core</td><td style="text-align:left">Digilent Basys 3 (Artix-7)</td><td style="text-align:left">Already your Vivado target; 100 MHz clock, XADC inputs on the JXADC header</td></tr>
+  <tr><td style="text-align:left">Weight DAC</td><td style="text-align:left">Quad DAC breakout, e.g. MCP4728 (12-bit, I²C)</td><td style="text-align:left">One chip covers the 4 cells of a tile. Use the top 8 bits to match the model's 8-bit codes. Weights are DC, so speed doesn't matter</td></tr>
+  <tr><td style="text-align:left">Analog switches</td><td style="text-align:left">SPDT analog switches rated for 3.3 V, e.g. ADG1236 or 74HC4053 class</td><td style="text-align:left">Model uses Ron = 80 Ω. Real Ron varies with signal voltage, which is a new error source the simulation doesn't have</td></tr>
+  <tr><td style="text-align:left">Summing node</td><td style="text-align:left">4 × 10 kΩ 0.1 % into 100 nF (C0G/film), 1 MΩ load</td><td style="text-align:left">τ ≈ 252 µs as in the netlist. Avoid X7R: its capacitance shifts with voltage</td></tr>
+  <tr><td style="text-align:left">Buffer</td><td style="text-align:left">Rail-to-rail op-amp follower</td><td style="text-align:left">The node impedance is about 2.5 kΩ, which is high for an ADC input. The buffer adds its own offset</td></tr>
+  <tr><td style="text-align:left">ADC</td><td style="text-align:left">Basys 3 XADC (12-bit, 0–1 V), or a Pmod ADC</td><td style="text-align:left">XADC is unipolar and 0–1 V, so keep weight voltages at or below about 1 V. Hardware passes are always non-negative (v⁺ and v⁻ run separately), so the model's signed ADC is not needed</td></tr>
+  <tr><td style="text-align:left">Host link</td><td style="text-align:left">USB-UART on the board + a Python script</td><td style="text-align:left">The script reuses the <code>mol_engine.py</code> controller code, with the analog pass replaced by a UART call</td></tr>
+ </table>
+
+ <h2 style="margin:18px 0 6px;font-size:18px">Build order</h2>
+ <div class="cards">
+  <div class="card"><b>1. Analog bench</b>Breadboard one tile: DAC, switches, 4 × Rf, Cf. Drive the switches from the FPGA with the existing <code>mac_ctrl</code> PWM. Check the settled node voltage against your SPICE result (about 0.27 V for your test weights).</div>
+  <div class="card"><b>2. Read it</b>Add an XADC wrapper and a UART. Confirm that pass A and pass B differ by the predicted amount, and that the read repeats to a few LSB.</div>
+  <div class="card"><b>3. Close the loop</b>Run <code>mac_fsm</code> jobs from the PC for one matvec, then a full benzene run. Compare the energy error to the Python error budget.</div>
+  <div class="card"><b>4. Scale up</b>Only after 1–3 work: several tiles in parallel, a PCB, or a SKY130 version.</div>
+ </div>
+
+ <h2 style="margin:18px 0 6px;font-size:18px">Things that will bite</h2>
+ <div class="cards">
+  <div class="card"><b>Switch dead time</b>The netlist drives S1 and S2 with ideal complementary pulses. Real switches can overlap for a few ns and short the DAC to ground through two Ron. The FPGA must generate a gap between PWM and its complement. <code>mac_ctrl.v</code> has none today.</div>
+  <div class="card"><b>DAC update path is new</b><code>mac_fsm</code> exposes <code>weights_dac</code> (32 bits) but nothing yet turns it into I²C or SPI traffic. That driver is new Verilog and needs its own testbench.</div>
+  <div class="card"><b>Placeholders become real</b>Offset and noise in the model are guesses. On hardware they are measured: switch charge injection, buffer offset, XADC noise. The first bench result replaces them.</div>
+  <div class="card"><b>Repeated reads</b>The FSM reads in consecutive PWM periods, about 10 µs apart on a 252 µs filter, so the noise samples are probably correlated. Averaging helps less on hardware than the model assumes.</div>
+  <div class="card"><b>Clock</b>Run the design from 25 MHz (10.2 µs PWM period, 198 settle periods) as the handoff proposes. At 100 MHz you need 791 settle periods.</div>
+ </div>
+</div>
 <script>
 const TRACE = __TRACE__;
 const T=TRACE, M=T.meta, n=M.n, nt=M.nt, tile=M.tile, EV=T.events;
 const NS="http://www.w3.org/2000/svg";
-const GREEN="#3fe08a",RED="#ff6b81",BLUE="#4fa3ff",ORG="#ffb454",PUR="#c792ea",IDLE="#2f3744",TXT="#aab4c3",BOX="#10151d";
+const LIGHT=(localStorage.getItem("theme")||(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark"))==="light";
+document.body.className=LIGHT?"light":"dark";
+const [GREEN,RED,BLUE,ORG,PUR,IDLE,TXT,BOX,HI,GRID,F_BLUE,F_GRN,F_ORG,F_PUR,ZN,ZB]=LIGHT
+ ?["#12994f","#d62f4b","#1f6fd6","#d9820b","#7b3fc4","#8a94a3","#3b4452","#ffffff","#111827","#aab3c0","#dbeafe","#d5f2e1","#fde8c8","#eadcfa","#f3f6fa","#d5dce6"]
+ :["#3fe08a","#ff6b81","#4fa3ff","#ffb454","#c792ea","#3b4658","#aab4c3","#10151d","#ffffff","#4a5568","#1c3a5e","#143524","#3a2a10","#2a1f45","#131a24","#2a313c"];
 const svg=document.getElementById("arch");
 function S(e,o){for(const k in o)e.setAttribute(k,o[k]);return e;}
 function el(tag,o,parent){const e=document.createElementNS(NS,tag);S(e,o);(parent||svg).appendChild(e);return e;}
 function txt(x,y,s,o,parent){const e=el("text",Object.assign({x:x,y:y,fill:TXT,"font-size":10,"text-anchor":"middle"},o||{}),parent);e.textContent=s;return e;}
+const HALO=c=>({stroke:c,"stroke-width":4,"paint-order":"stroke"});
 document.getElementById("title").textContent="Hückel "+M.name+" on hybrid analog MAC";
 
 // ---------- geometry ----------
-const X0=120,CS=34,GAP=28,Y0=140,RS=32,VY=22,PY=62;
+const X0=120,CS=34,GAP=28,Y0=196,RS=32,VY=30,PY=76;
+const WY=PY+38,WH=10;                       // PWM mini-waveform baseline / height
 const colX=j=>X0+j*CS+Math.floor(j/tile)*GAP+CS/2;
 const rowY=r=>Y0+r*RS;
 const nodeX=t=>colX(Math.min((t+1)*tile,n)-1)+CS/2+GAP/2;
-const accX=nodeX(nt-1)+50, BX=accX+76, FX=accX+104, CY=rowY(n-1)+62;
-svg.setAttribute("width",FX+30); svg.setAttribute("height",CY+50);
+const accX=nodeX(nt-1)+50, BX=accX+76, FX=accX+104, CY=rowY(n-1)+66;
+svg.setAttribute("width",FX+34); svg.setAttribute("height",CY+54);
 
-txt(8,VY+4,"VECTOR REG",{"text-anchor":"start","font-size":9});
-txt(8,PY+15,"PWM TIMERS",{"text-anchor":"start","font-size":9});
-txt(colX(0)-CS/2,Y0-31,"ANALOG CELL ARRAY (switch × DAC code)",{"text-anchor":"start","font-size":9});
-txt(colX(0)-CS/2,Y0-20,"squares = tile summing nodes → ADC",{"text-anchor":"start","font-size":9});
-txt(14,Y0-20,"WEIGHT SHIFT REGS",{"text-anchor":"start","font-size":9});
-txt(accX+32,Y0-20,"ACCUMULATE",{"font-size":9});
+const defs=el("defs",{});
+const flt=el("filter",{id:"sh",x:"-10%",y:"-20%",width:"120%",height:"160%"},defs);
+el("feDropShadow",{dx:0,dy:1.5,stdDeviation:1.6,"flood-color":"#000","flood-opacity":LIGHT?0.16:0.5},flt);
+const SH="url(#sh)";
 
-const vl=[],cl=[],vb=[],vt=[],dt=[],pb=[];
+// zones (drawn first = behind everything)
+const zbB=rowY(n-1)+24;
+el("rect",{x:6,y:4,width:colX(n-1)+CS/2+10-6,height:132,rx:8,fill:ZN,stroke:ZB});
+el("rect",{x:6,y:142,width:nodeX(nt-1)+22-6,height:zbB-142,rx:8,fill:ZN,stroke:ZB});
+el("rect",{x:accX-10,y:142,width:84,height:zbB-142,rx:8,fill:ZN,stroke:ZB});
+
+txt(14,16,"DIGITAL INPUT",{"text-anchor":"start","font-size":8,"font-weight":700,"letter-spacing":1});
+txt(14,VY+4,"ACTIVATION VECTOR",{"text-anchor":"start","font-size":9});
+txt(14,PY+15,"PWM TIMERS",{"text-anchor":"start","font-size":9});
+txt(14,158,"ANALOG CORE",{"text-anchor":"start","font-size":8,"font-weight":700,"letter-spacing":1});
+txt(14,Y0-14,"WEIGHT INPUTS",{"text-anchor":"start","font-size":9});
+txt(accX+32,158,"READOUT",{"font-size":8,"font-weight":700,"letter-spacing":1});
+txt(accX+32,Y0-14,"OUTPUTS y",{"font-size":9});
+
+const vl=[],cl=[],vb=[],vt=[],dt=[],pb=[],wv=[];
+const flatW=j=>"M"+(colX(j)-11)+","+WY+"L"+(colX(j)+11)+","+WY;
+function wave(x0,yb,h,d){
+ let s="M"+x0+","+yb;
+ for(let k=0;k<2;k++){
+  const px=x0+11*k;
+  if(d<=0.004) s+="L"+(px+11)+","+yb;
+  else if(d>=0.996) s+="L"+px+","+(yb-h)+"L"+(px+11)+","+(yb-h);
+  else{const hi=11*d;s+="L"+px+","+(yb-h)+"L"+(px+hi)+","+(yb-h)+"L"+(px+hi)+","+yb+"L"+(px+11)+","+yb;}
+ }
+ return s;
+}
 for(let j=0;j<n;j++){
  vl[j]=el("line",{x1:colX(j),y1:VY+14,x2:colX(j),y2:PY,stroke:IDLE,"stroke-width":1});
- cl[j]=el("line",{x1:colX(j),y1:PY+22,x2:colX(j),y2:rowY(n-1)+12,stroke:IDLE,"stroke-width":1});
+ el("line",{x1:colX(j),y1:PY+22,x2:colX(j),y2:PY+28,stroke:IDLE,"stroke-width":1});
+ cl[j]=el("line",{x1:colX(j),y1:PY+56,x2:colX(j),y2:rowY(n-1)+12,stroke:IDLE,"stroke-width":1});
 }
-const rw=[],aw=[],ce=[],nd=[],ndt=[],wsr=[],wl=[],ar=[],at=[],sb=[];
+const rw=[],aw=[],ce=[],lev=[],nd=[],ndt=[],wsr=[],wl=[],ar=[],at=[],sb=[];
 for(let r=0;r<n;r++){
- rw[r]=[];aw[r]=[];ce[r]=[];nd[r]=[];ndt[r]=[];
+ rw[r]=[];aw[r]=[];ce[r]=[];lev[r]=[];nd[r]=[];ndt[r]=[];
  wl[r]=el("line",{x1:96,y1:rowY(r),x2:colX(0)-CS/2,y2:rowY(r),stroke:IDLE,"stroke-width":1});
  for(let t=0;t<nt;t++){
   rw[r][t]=el("line",{x1:colX(t*tile)-CS/2,y1:rowY(r),x2:nodeX(t),y2:rowY(r),stroke:IDLE,"stroke-width":1});
-  aw[r][t]=el("path",{d:"M"+nodeX(t)+","+(rowY(r)+7)+"V"+(rowY(r)+9+2*t)+"H"+accX,fill:"none",stroke:IDLE,"stroke-width":1});
+  aw[r][t]=el("path",{d:"M"+nodeX(t)+","+(rowY(r)+8)+"V"+(rowY(r)+10+2*t)+"H"+accX,fill:"none",stroke:IDLE,"stroke-width":1});
  }
  sb[r]=el("line",{x1:accX+64,y1:rowY(r),x2:BX,y2:rowY(r),stroke:IDLE,"stroke-width":1});
 }
 const bus=el("path",{d:"M"+BX+","+rowY(0)+"V"+CY+"H"+(accX+64),fill:"none",stroke:IDLE,"stroke-width":1});
 const fb=el("path",{d:"M"+(accX+64)+","+(CY+10)+"H"+FX+"V"+VY+"H"+(colX(n-1)+15),fill:"none",stroke:IDLE,"stroke-width":1});
+const FLOWEL=[].concat(vl,cl,wl,sb,[bus,fb]);
+for(let r=0;r<n;r++){FLOWEL.push(...rw[r]);FLOWEL.push(...aw[r]);}
+txt(0,0,"y⁺ − y⁻",{transform:"translate("+(BX+12)+","+((rowY(0)+CY)/2)+") rotate(-90)","font-size":9});
+txt(0,0,"feedback: next v",{transform:"translate("+(FX+14)+","+((VY+CY)/2)+") rotate(-90)","font-size":9});
+
 for(let j=0;j<n;j++){
- vb[j]=el("rect",{x:colX(j)-15,y:VY-12,width:30,height:26,rx:3,fill:BOX,stroke:IDLE});
- vt[j]=txt(colX(j),VY+4,"",{fill:"#fff","font-size":9});
- dt[j]=txt(colX(j)+9,PY+36,"",{"font-size":8});
+ txt(colX(j),VY-17,"C"+j,{"font-size":8});
+ vb[j]=el("rect",{x:colX(j)-15,y:VY-12,width:30,height:26,rx:4,fill:BOX,stroke:IDLE,filter:SH});
+ vt[j]=txt(colX(j),VY+4,"",{fill:HI,"font-size":9});
+ wv[j]=el("path",{d:flatW(j),fill:"none",stroke:IDLE,"stroke-width":1.6,"stroke-linejoin":"round"});
+ dt[j]=txt(colX(j),PY+51,"",{"font-size":8});
 }
 for(let t=0;t<nt;t++){
  const f=t*tile,l=Math.min((t+1)*tile,n)-1;
- pb[t]=el("rect",{x:colX(f)-15,y:PY,width:colX(l)-colX(f)+30,height:22,rx:3,fill:BOX,stroke:IDLE});
+ pb[t]=el("rect",{x:colX(f)-15,y:PY,width:colX(l)-colX(f)+30,height:22,rx:4,fill:BOX,stroke:IDLE,filter:SH});
  txt((colX(f)+colX(l))/2,PY+15,"PWM tile "+t);
 }
+const LV_OPEN="M-5,4L4,-4",LV_CLOSED="M-5,0L5,0";
 for(let r=0;r<n;r++){
- for(let j=0;j<n;j++) ce[r][j]=el("circle",{cx:colX(j),cy:rowY(r),r:7,fill:BLUE,"fill-opacity":0.02,stroke:IDLE,"stroke-width":1});
- for(let t=0;t<nt;t++){
-  nd[r][t]=el("rect",{x:nodeX(t)-11,y:rowY(r)-7,width:22,height:14,rx:3,fill:BOX,stroke:IDLE});
-  ndt[r][t]=txt(nodeX(t),rowY(r)+3,"",{"font-size":8,fill:"#fff"});
+ for(let j=0;j<n;j++){
+  el("circle",{cx:colX(j),cy:rowY(r),r:8,fill:ZN});
+  const g=el("g",{transform:"translate("+colX(j)+","+rowY(r)+")","fill-opacity":0.02,stroke:IDLE,"stroke-width":1});
+  el("circle",{r:8,fill:BLUE},g);
+  lev[r][j]=el("path",{d:LV_OPEN,fill:"none","stroke-width":1.8,"stroke-linecap":"round"},g);
+  ce[r][j]=g;
  }
- wsr[r]=el("rect",{x:14,y:rowY(r)-9,width:82,height:18,rx:3,fill:BOX,stroke:IDLE});
+ for(let t=0;t<nt;t++){
+  nd[r][t]=el("rect",{x:nodeX(t)-13,y:rowY(r)-8,width:26,height:16,rx:4,fill:BOX,stroke:IDLE,filter:SH});
+  ndt[r][t]=txt(nodeX(t),rowY(r)+3.5,"Σ",{"font-size":9,fill:HI});
+ }
+ wsr[r]=el("rect",{x:14,y:rowY(r)-9,width:82,height:18,rx:4,fill:BOX,stroke:IDLE,filter:SH});
  txt(55,rowY(r)+4,"WSR row "+r);
- ar[r]=el("rect",{x:accX,y:rowY(r)-10,width:64,height:20,rx:3,fill:BOX,stroke:IDLE});
- at[r]=txt(accX+32,rowY(r)+4,"",{fill:"#fff"});
+ ar[r]=el("rect",{x:accX,y:rowY(r)-10,width:64,height:20,rx:4,fill:BOX,stroke:IDLE,filter:SH});
+ at[r]=txt(accX+32,rowY(r)+4,"",{fill:HI});
 }
 const ctrlW=accX+64-X0;
-const ctrl=el("rect",{x:X0,y:CY-18,width:ctrlW,height:46,rx:4,fill:BOX,stroke:IDLE});
-txt(X0+ctrlW/2,CY,"DIGITAL CONTROLLER: combine (+/−) · Gram-Schmidt · normalise · converged?",{fill:"#fff","font-size":10});
-const ctrlT2=txt(X0+ctrlW/2,CY+16,"",{fill:PUR,"font-size":11});
+const ctrl=el("rect",{x:X0,y:CY-24,width:ctrlW,height:60,rx:6,fill:BOX,stroke:IDLE,"stroke-width":1.5,filter:SH});
+txt(X0+ctrlW/2,CY-8,"DIGITAL CONTROLLER",{fill:HI,"font-size":11,"font-weight":700});
+txt(X0+ctrlW/2,CY+6,"combine (+/−) · Gram-Schmidt · normalise · converged?",{"font-size":9});
+const ctrlT2=txt(X0+ctrlW/2,CY+24,"",{fill:PUR,"font-size":11});
 
 // ---------- molecule panel ----------
 const msvg=document.getElementById("mol");
 const xs=M.coords.map(c=>c[0]),ys=M.coords.map(c=>c[1]);
 const minx=Math.min(...xs),maxx=Math.max(...xs),miny=Math.min(...ys),maxy=Math.max(...ys);
-const sc=Math.min(240/Math.max(maxx-minx,0.01),170/Math.max(maxy-miny,0.01),80);
-const ax=i=>150+(M.coords[i][0]-(minx+maxx)/2)*sc, ay=i=>125-(M.coords[i][1]-(miny+maxy)/2)*sc;
-txt(150,14,"orbital amplitude on each atom (blue +, red −)",{},msvg);
-M.edges.forEach(e=>el("line",{x1:ax(e[0]),y1:ay(e[0]),x2:ax(e[1]),y2:ay(e[1]),stroke:"#4a5568","stroke-width":2},msvg));
-const atoms=M.coords.map((c,i)=>el("circle",{cx:ax(i),cy:ay(i),r:7,fill:"none",stroke:"#6b7686"},msvg));
-M.coords.forEach((c,i)=>txt(ax(i),ay(i)+3,String(i),{"font-size":9,fill:"#fff"},msvg));
-function updateMol(vec){
+function layout(cx,cy,hw,hh,rmax){
+ const sc=Math.min(hw/Math.max((maxx-minx)/2,0.01),hh/Math.max((maxy-miny)/2,0.01),rmax);
+ return i=>[cx+(M.coords[i][0]-(minx+maxx)/2)*sc, cy-(M.coords[i][1]-(miny+maxy)/2)*sc];
+}
+const MW=330,MH=300,pos=layout(MW/2,165,84,72,80);
+txt(MW/2,15,"molecule: π orbital on each carbon",{"font-size":11},msvg);
+const mcap=txt(MW/2,32,"",{fill:HI,"font-size":11},msvg);
+const mcap2=txt(MW/2,47,"",{"font-size":10},msvg);
+txt(MW/2,MH-8,"green bond = in phase · red dashed = out of phase",{"font-size":9},msvg);
+const bonds=M.edges.map(e=>{const a=pos(e[0]),b=pos(e[1]);return el("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1],stroke:GRID,"stroke-width":2},msvg);});
+const atoms=[],avals=[];
+M.coords.forEach((c,i)=>{
+ const p=pos(i),dx=p[0]-MW/2,dy=p[1]-165,d=Math.hypot(dx,dy)||1;
+ const side=Math.abs(dx)/d>0.6;
+ const anc=side?(dx>0?"start":"end"):"middle";
+ const tx=side?p[0]+(dx>0?26:-26):p[0], ty=side?p[1]+3:(dy<0?p[1]-28:p[1]+34);
+ atoms[i]=el("circle",{cx:p[0],cy:p[1],r:7,fill:"none",stroke:IDLE,"stroke-width":1.5},msvg);
+ avals[i]=txt(tx,ty,"",{"text-anchor":anc,"font-size":10,fill:HI,stroke:BOX,"stroke-width":3,"paint-order":"stroke"},msvg);
+});
+function updateMol(vec,orb,fin){
  const mx=vec?Math.max(...vec.map(Math.abs))||1:1;
  atoms.forEach((a,i)=>{
-  if(!vec){S(a,{r:7,fill:"none"});return;}
-  S(a,{r:5+17*Math.abs(vec[i])/mx,fill:vec[i]>=0?BLUE:RED,"fill-opacity":0.8});
+  if(!vec){S(a,{r:7,fill:"none"});avals[i].textContent="C"+i;return;}
+  S(a,{r:5+17*Math.abs(vec[i])/mx,fill:vec[i]>=0?BLUE:RED,"fill-opacity":0.85});
+  avals[i].textContent="C"+i+"  "+(vec[i]>=0?"+":"−")+Math.abs(vec[i]).toFixed(2);
+ });
+ M.edges.forEach((e,k)=>{
+  const same=vec&&vec[e[0]]*vec[e[1]]>=0;
+  S(bonds[k],vec?{stroke:same?GREEN:RED,"stroke-width":same?3:2,"stroke-dasharray":same?"none":"4 3"}:{stroke:GRID,"stroke-width":2,"stroke-dasharray":"none"});
+ });
+ const R=orb>=0?T.result.orbitals[orb]:null;
+ if(!vec||!R){mcap.textContent="no orbital yet";mcap2.textContent="";return;}
+ const x=R.x_exact,kind=x>0.05?"bonding":x<-0.05?"antibonding":"non-bonding";
+ const flips=M.edges.filter(e=>vec[e[0]]*vec[e[1]]<0).length;
+ mcap.textContent="orbital "+orb+" · x = "+x.toFixed(2)+" ("+kind+") · "+(fin?"final":"estimate");
+ mcap2.textContent=flips+" of "+M.edges.length+" bonds out of phase";
+}
+
+// finished-orbital thumbnails
+const nocc=T.result.orbitals.length,GCOLS=3,GW=110,GH=104;
+const gsvg=document.getElementById("gallery");
+gsvg.setAttribute("width",GCOLS*GW);gsvg.setAttribute("height",24+Math.ceil(nocc/GCOLS)*GH);
+const gp=layout(GW/2,44,40,28,34);
+function drawGallery(done){
+ while(gsvg.firstChild) gsvg.removeChild(gsvg.firstChild);
+ txt(GCOLS*GW/2,14,"finished orbitals (each holds ↑↓)",{},gsvg);
+ done.forEach(d=>{
+  const k=d.orb,ox=(k%GCOLS)*GW,oy=24+Math.floor(k/GCOLS)*GH,v=d.vec,mx=Math.max(...v.map(Math.abs))||1;
+  M.edges.forEach(e=>{const a=gp(e[0]),b=gp(e[1]);el("line",{x1:ox+a[0],y1:oy+a[1],x2:ox+b[0],y2:oy+b[1],stroke:GRID,"stroke-width":1},gsvg);});
+  v.forEach((c,i)=>{const p=gp(i);el("circle",{cx:ox+p[0],cy:oy+p[1],r:2+6*Math.abs(c)/mx,fill:c>=0?BLUE:RED,"fill-opacity":0.85},gsvg);});
+  txt(ox+GW/2,oy+GH-12,"#"+k+" · x = "+d.x_analog.toFixed(3),{fill:GREEN},gsvg);
  });
 }
 
@@ -137,14 +345,14 @@ function drawLevels(done){
  const Y=e=>H-12-(e-lo)/(hi-lo)*(H-40);
  ex.forEach((e,i)=>{
   const x0=40+dupIdx[i]*60;
-  g.strokeStyle="#4a5568";g.setLineDash([4,3]);g.beginPath();g.moveTo(x0,Y(e));g.lineTo(x0+50,Y(e));g.stroke();g.setLineDash([]);
+  g.strokeStyle=GRID;g.setLineDash([4,3]);g.beginPath();g.moveTo(x0,Y(e));g.lineTo(x0+50,Y(e));g.stroke();g.setLineDash([]);
   if(dupIdx[i]===0){g.fillStyle=TXT;g.fillText(e.toFixed(3),4,Y(e)+4);}
  });
  done.forEach(d=>{
   const e=-d.x_analog,x0=40+dupIdx[d.orb]*60;
   g.strokeStyle=GREEN;g.lineWidth=3;g.beginPath();g.moveTo(x0,Y(e));g.lineTo(x0+50,Y(e));g.stroke();g.lineWidth=1;
-  g.fillStyle="#fff";g.fillText("↑↓",x0+17,Y(e)-5);
-  g.fillStyle=GREEN;g.fillText("x="+d.x_analog.toFixed(3),x0+(dupIdx[d.orb]?0:0),Y(e)+14);
+  g.fillStyle=HI;g.fillText("↑↓",x0+17,Y(e)-5);
+  g.fillStyle=GREEN;g.fillText("x="+d.x_analog.toFixed(3),x0,Y(e)+14);
  });
 }
 function drawConv(pts){
@@ -152,12 +360,19 @@ function drawConv(pts){
  g.clearRect(0,0,W,H);g.fillStyle=TXT;g.font="11px Segoe UI";
  g.fillText("convergence: log10(Δ vector) per iteration",8,14);
  const lo=-3,hi=0.5,Y=v=>H-14-(Math.log10(Math.max(v,1e-6))-lo)/(hi-lo)*(H-36);
- g.strokeStyle="#4a5568";g.setLineDash([4,3]);g.beginPath();g.moveTo(8,Y(M.cfg.tol));g.lineTo(W-8,Y(M.cfg.tol));g.stroke();g.setLineDash([]);
+ g.strokeStyle=GRID;g.setLineDash([4,3]);g.beginPath();g.moveTo(8,Y(M.cfg.tol));g.lineTo(W-8,Y(M.cfg.tol));g.stroke();g.setLineDash([]);
  g.fillText("tol",W-30,Y(M.cfg.tol)-3);
  const xm=Math.max(20,pts.length);
  g.strokeStyle=ORG;g.beginPath();
  pts.forEach((p,i)=>{const x=8+i/(xm-1)*(W-16),y=Y(p);if(i)g.lineTo(x,y);else g.moveTo(x,y);});g.stroke();
 }
+
+// ---------- stage strip ----------
+const STAGES=["1 Load weights","2 Split v⁺ / v⁻","3 PWM duty","4 Multiply","5 Sum & settle","6 ADC","7 Accumulate","8 Controller"];
+const pipe=document.getElementById("pipe");
+const chips=STAGES.map(s=>{const c=document.createElement("span");c.className="chip";c.textContent=s;pipe.appendChild(c);return c;});
+function setStage(k,col){chips.forEach((c,i)=>{const on=i===k;c.style.borderColor=on?col:"";c.style.background=on?col+"26":"";c.style.color=on?col:"";c.style.fontWeight=on?"600":"";});}
+function fl(e){e.setAttribute("class","flow");}
 
 // ---------- timeline ----------
 const steps=[];
@@ -180,65 +395,72 @@ function stageDesc(ev,s){
 
 function render(k){
  const st=steps[k],ev=EV[st.i];
+ FLOWEL.forEach(e=>e.removeAttribute("class"));
  vl.forEach(e=>S(e,{stroke:IDLE,"stroke-width":1}));cl.forEach(e=>S(e,{stroke:IDLE,"stroke-width":1}));
  vb.forEach(e=>S(e,{stroke:IDLE}));vt.forEach(e=>e.textContent="");dt.forEach(e=>e.textContent="");
+ wv.forEach((e,j)=>S(e,{d:flatW(j),stroke:IDLE}));
  pb.forEach(e=>S(e,{stroke:IDLE,fill:BOX}));
  let loaded=-1;for(let i=0;i<=st.i;i++) if(EV[i].t==="load") loaded=EV[i].row;
  for(let r=0;r<n;r++){
   S(wsr[r],{stroke:IDLE,fill:BOX});S(wl[r],{stroke:IDLE,"stroke-width":1});
   S(ar[r],{stroke:IDLE,fill:BOX});at[r].textContent="";S(sb[r],{stroke:IDLE,"stroke-width":1});
-  for(let j=0;j<n;j++) S(ce[r][j],{"fill-opacity":r<=loaded?0.06+0.55*M.wcode[r][j]/M.wl:0.02,stroke:IDLE,"stroke-width":1});
-  for(let t=0;t<nt;t++){S(rw[r][t],{stroke:IDLE,"stroke-width":1});S(aw[r][t],{stroke:IDLE,"stroke-width":1});S(nd[r][t],{stroke:IDLE,fill:BOX});ndt[r][t].textContent="";}
+  for(let j=0;j<n;j++){S(ce[r][j],{"fill-opacity":r<=loaded?0.06+0.55*M.wcode[r][j]/M.wl:0.02,stroke:IDLE,"stroke-width":1});lev[r][j].setAttribute("d",LV_OPEN);}
+  for(let t=0;t<nt;t++){S(rw[r][t],{stroke:IDLE,"stroke-width":1});S(aw[r][t],{stroke:IDLE,"stroke-width":1});S(nd[r][t],{stroke:IDLE,fill:BOX});ndt[r][t].textContent="Σ";}
  }
  S(bus,{stroke:IDLE,"stroke-width":1});S(fb,{stroke:IDLE,"stroke-width":1});S(ctrl,{stroke:IDLE,fill:BOX});ctrlT2.textContent="";
 
- let vec=null,desc="",hw=0,orb=-1;
+ let vec=null,desc="",hw=0,orb=-1,stg=-1,scol=BLUE;
  if(ev.t==="load"){
-  const r=ev.row;
-  S(wsr[r],{stroke:BLUE,fill:"#1c3a5e"});S(wl[r],{stroke:BLUE,"stroke-width":4});
+  const r=ev.row;stg=0;
+  S(wsr[r],{stroke:BLUE,fill:F_BLUE});S(wl[r],{stroke:BLUE,"stroke-width":3});fl(wl[r]);
   for(let j=0;j<n;j++) S(ce[r][j],{stroke:BLUE,"stroke-width":2});
   desc="WEIGHT LOAD — row "+r+": one 32-bit shift register per tile clocks in "+ev.words.join(" , ")+" ({w4,w3,w2,w1}, as in mac_ctrl.v)";
  } else if(ev.t==="done"){
-  vec=ev.vec;orb=ev.orb;hw=ev.t_us;
+  vec=ev.vec;orb=ev.orb;hw=ev.t_us;stg=7;scol=PUR;
   desc="ORBITAL "+ev.orb+" converged after "+ev.iters+" iterations: analog x = "+ev.x_analog.toFixed(4)+", refined = "+ev.x_refined.toFixed(4)+", exact = "+ev.x_exact.toFixed(4);
  } else {
   orb=ev.orb;hw=ev.t_us;const s=st.s;vec=ev.v;desc=stageDesc(ev,s);
   if(s===0){
-   for(let j=0;j<n;j++){S(vl[j],{stroke:BLUE,"stroke-width":1+5*Math.abs(ev.v[j])/ev.vmax});S(vb[j],{stroke:BLUE});}
+   stg=1;
+   for(let j=0;j<n;j++){S(vl[j],{stroke:BLUE,"stroke-width":1+2.5*Math.abs(ev.v[j])/ev.vmax});fl(vl[j]);S(vb[j],{stroke:BLUE});}
   } else if(s<=10){
    const pi=Math.floor((s-1)/5),sub=(s-1)%5,P=ev.passes[pi],col=P.sign==="+"?GREEN:RED;
+   stg=sub+2;scol=sub===0?BLUE:(sub<=2?col:(sub===3?ORG:BLUE));
    if(sub<=2) for(let j=0;j<n;j++){
-    S(cl[j],{stroke:col,"stroke-width":1+6*P.duty[j]/M.dmax});
+    S(cl[j],{stroke:col,"stroke-width":1+2.5*P.duty[j]/M.dmax});
+    if(P.duty[j]>0) fl(cl[j]);
+    S(wv[j],{d:wave(colX(j)-11,WY,WH,P.duty[j]/(M.dmax||255)),stroke:col});
     dt[j].textContent=P.duty[j];
    }
-   if(sub===0) pb.forEach(e=>S(e,{stroke:BLUE,fill:"#1c3a5e"}));
+   if(sub===0) pb.forEach(e=>S(e,{stroke:BLUE,fill:F_BLUE}));
    if(sub===1||sub===2) for(let r=0;r<n;r++)for(let j=0;j<n;j++){
-    const p=P.prod[r][j]; if(p>0.002) S(ce[r][j],{stroke:col,"stroke-width":0.8+8*p});
+    const p=P.prod[r][j]; if(p>0.002){S(ce[r][j],{stroke:col,"stroke-width":1.2+1.2*Math.min(1,p)});lev[r][j].setAttribute("d",LV_CLOSED);}
    }
    if(sub===2) for(let r=0;r<n;r++)for(let t=0;t<nt;t++){
     const a=Math.abs(P.node[r][t]);
-    S(rw[r][t],{stroke:col,"stroke-width":1+4*Math.min(1,a/M.fs)});
-    S(nd[r][t],{stroke:col,fill:"#143524"});ndt[r][t].textContent=P.node[r][t].toFixed(2);
+    S(rw[r][t],{stroke:col,"stroke-width":1+2*Math.min(1,a/M.fs)});fl(rw[r][t]);
+    S(nd[r][t],{stroke:col,fill:F_GRN});ndt[r][t].textContent=P.node[r][t].toFixed(2);
    }
    if(sub>=3) for(let r=0;r<n;r++)for(let t=0;t<nt;t++){
     const a=Math.abs(P.code[r][t])/M.top;
-    S(nd[r][t],{stroke:ORG,fill:"#3a2a10"});ndt[r][t].textContent=P.code[r][t];
-    S(aw[r][t],{stroke:ORG,"stroke-width":1+4*Math.min(1,a)});
+    S(nd[r][t],{stroke:ORG,fill:F_ORG});ndt[r][t].textContent=P.code[r][t];
+    S(aw[r][t],{stroke:ORG,"stroke-width":1+2*Math.min(1,a)});fl(aw[r][t]);
    }
-   if(sub===4) for(let r=0;r<n;r++){S(ar[r],{stroke:BLUE,fill:"#1c3a5e"});at[r].textContent=P.rowsum[r].toFixed(3);}
+   if(sub===4) for(let r=0;r<n;r++){S(ar[r],{stroke:BLUE,fill:F_BLUE});at[r].textContent=P.rowsum[r].toFixed(3);}
   } else {
-   vec=ev.vn;
-   S(ctrl,{stroke:PUR,fill:"#2a1f45"});S(bus,{stroke:PUR,"stroke-width":3});S(fb,{stroke:PUR,"stroke-width":3});
-   for(let r=0;r<n;r++){S(ar[r],{stroke:PUR,fill:"#2a1f45"});at[r].textContent=ev.y[r].toFixed(3);S(sb[r],{stroke:PUR,"stroke-width":1+3*Math.abs(ev.y[r])/(M.wscale*2)});}
+   vec=ev.vn;stg=7;scol=PUR;
+   S(ctrl,{stroke:PUR,fill:F_PUR});S(bus,{stroke:PUR,"stroke-width":2});S(fb,{stroke:PUR,"stroke-width":2});fl(bus);fl(fb);
+   for(let r=0;r<n;r++){S(ar[r],{stroke:PUR,fill:F_PUR});at[r].textContent=ev.y[r].toFixed(3);S(sb[r],{stroke:PUR,"stroke-width":1+3*Math.abs(ev.y[r])/(M.wscale*2)});fl(sb[r]);}
    for(let j=0;j<n;j++) S(vb[j],{stroke:PUR});
    ctrlT2.textContent="Δ = "+ev.change.toFixed(4)+"     x ≈ "+ev.lam_x.toFixed(3);
   }
  }
+ setStage(stg,scol);
  if(vec) for(let j=0;j<n;j++) vt[j].textContent=vec[j].toFixed(2);
- updateMol(vec);
+ updateMol(vec,orb,ev.t==="done");
 
  const done=[];for(let i=0;i<=st.i;i++) if(EV[i].t==="done") done.push(EV[i]);
- drawLevels(done);
+ drawLevels(done);drawGallery(done);
  const pts=[];for(let i=0;i<=st.i;i++) if(EV[i].t==="iter"&&EV[i].orb===orb) pts.push(EV[i].change);
  drawConv(pts);
 
@@ -277,5 +499,86 @@ document.getElementById("nextorb").onclick=()=>{pause();for(let i=idx+1;i<steps.
 speed.oninput=()=>{document.getElementById("spv").textContent=speed.value;};
 scrub.oninput=()=>{pause();idx=+scrub.value;render(idx);};
 document.addEventListener("keydown",e=>{if(e.code==="Space"){e.preventDefault();toggle();}});
+
+// ---------- theme, tabs, legend, summary ----------
+document.getElementById("legend").innerHTML=[[BLUE,"digital / weight load"],[GREEN,"analog, v⁺ pass"],[RED,"analog, v⁻ pass"],[ORG,"ADC"],[PUR,"controller"]]
+ .map(a=>'<span style="color:'+a[0]+'">■ '+a[1]+'</span>').join(" &nbsp; ")+" &nbsp; line width = signal size · moving dashes = signal flowing<br>cell = switch × DAC code · Σ = tile summing node (RC filter) → ADC";
+const themeBtn=document.getElementById("theme");
+themeBtn.textContent=LIGHT?"🌙 Dark":"☀ Light";
+themeBtn.onclick=()=>{localStorage.setItem("theme",LIGHT?"dark":"light");location.reload();};
+const simv=document.getElementById("simview"),gd=document.getElementById("guide"),ctl=document.getElementById("ctl"),
+ tS=document.getElementById("tabsim"),tG=document.getElementById("tabguide");
+const pv=document.getElementById("proto"),tP=document.getElementById("tabproto");
+function tab(v){pause();simv.style.display=v===0?"":"none";gd.style.display=v===1?"block":"none";pv.style.display=v===2?"block":"none";ctl.style.display=v===0?"contents":"none";tS.className=v===0?"on":"";tG.className=v===1?"on":"";tP.className=v===2?"on":"";}
+tS.onclick=()=>tab(0);tG.onclick=()=>tab(1);tP.onclick=()=>tab(2);
+(function(){
+ const R=T.result,C=M.cfg||{},f=(x,d)=>(x==null||isNaN(x))?"–":(+x).toFixed(d);
+ const its=R.orbitals.reduce((s,o)=>s+o.iters,0),last=EV[EV.length-1];
+ const eA=R.E_analog-R.E_exact,eR=R.E_refined-R.E_exact;
+ const cards=[
+  ["Exact π energy",f(R.E_exact,4)+" β","eigenvalues of A computed on the PC, for comparison only"],
+  ["Analog energy",f(R.E_analog,4)+" β","error "+f(eA,4)+" β ("+f(100*Math.abs(eA)/R.E_exact,2)+" %), read from the analog passes"],
+  ["Refined energy",f(R.E_refined,4)+" β","error "+f(eR,4)+" β: same vectors, energy recomputed digitally"],
+  ["Estimated hardware time",f((last.t_us||0)/1000,1)+" ms",its+" iterations, each = 2 analog passes (v⁺, v⁻) × "+(C.matvec_reads||1)+" read(s); includes calibration if enabled"],
+  ["Chip model","seed "+C.seed,"gain σ "+f(100*C.gain_sigma,1)+" %, offset σ "+C.offset_sigma+", noise σ "+C.noise_sigma+", ADC "+C.adc_bits+" bit, calibration: "+C.calibrate]
+ ];
+ document.getElementById("sumcards").innerHTML=cards.map(c=>'<div class="card"><b>'+c[0]+'</b><span class="big">'+c[1]+'</span><br><span class="mut">'+c[2]+'</span></div>').join("");
+ document.getElementById("sumnote").textContent=(M.name==="benzene"&&C.calibrate==="none")
+  ?"One run is one randomly drawn chip, so its error is a single draw, not the typical error. For benzene without calibration the energy error varies by about ±0.04 β between chips (measured over 40 chips)."
+  :"One run is one randomly drawn chip, so its error is a single draw, not the typical error. Run many seeds to get the spread for this molecule and these settings.";
+})();
+// ---------- prototype diagram ----------
+(function(){
+ const P=document.getElementById("psvg");
+ const E=(t,o)=>el(t,o,P);
+ const T2=(x,y,s,o)=>txt(x,y,s,o,P);
+ const box=(x,y,w,h,title,sub,col,fill)=>{E("rect",{x:x,y:y,width:w,height:h,rx:6,fill:fill||BOX,stroke:col,"stroke-width":1.5});
+  T2(x+w/2,y+16,title,{fill:HI,"font-size":11,"font-weight":700});
+  (sub||[]).forEach((s,i)=>T2(x+w/2,y+32+i*13,s,{"font-size":9}));};
+ const arrow=(d,col,lab,lx,ly)=>{E("path",{d:d,fill:"none",stroke:col,"stroke-width":1.6,"marker-end":"url(#pa)"});if(lab)T2(lx,ly,lab,{"font-size":9});};
+ const df=E("defs",{});const mk=el("marker",{id:"pa",viewBox:"0 0 10 10",refX:9,refY:5,markerWidth:7,markerHeight:7,orient:"auto-start-reverse"},df);
+ el("path",{d:"M0,0L10,5L0,10z",fill:TXT},mk);
+
+ // zones
+ E("rect",{x:8,y:8,width:150,height:384,rx:8,fill:ZN,stroke:ZB});T2(83,24,"HOST PC",{"font-size":8,"font-weight":700,"letter-spacing":1});
+ E("rect",{x:190,y:8,width:430,height:384,rx:8,fill:ZN,stroke:ZB});T2(405,24,"FPGA BOARD (Basys 3, Artix-7)",{"font-size":8,"font-weight":700,"letter-spacing":1});
+ E("rect",{x:650,y:8,width:342,height:384,rx:8,fill:ZN,stroke:ZB});T2(821,24,"ANALOG BOARD (one 4-input tile)",{"font-size":8,"font-weight":700,"letter-spacing":1});
+
+ // host
+ box(22,50,122,110,"Python controller",["mol_engine.py logic:","split v⁺ / v⁻","Gram-Schmidt","normalise · converged?"],PUR,F_PUR);
+ box(22,200,122,60,"Job list",["per (row, tile):","weights, duty, reads"],BLUE,F_BLUE);
+
+ // fpga
+ box(206,44,120,56,"UART",["host link","jobs in, sums out"],BLUE,F_BLUE);
+ box(206,120,120,70,"mac_fsm",["load · settle (198","periods) · sample","sum_pos / sum_neg"],PUR,F_PUR);
+ box(206,210,120,56,"mac_ctrl",["32-bit shift reg","4 × PWM, period 255"],BLUE,F_BLUE);
+ box(206,286,120,48,"25 MHz clock",["10.2 µs PWM period"],BLUE,F_BLUE);
+ box(470,60,136,60,"DAC driver (new)",["weights_dac → I²C/SPI","8-bit codes"],ORG,F_ORG);
+ box(470,150,136,60,"PWM + complement",["pwm[k], ~pwm[k]","dead-time gap (new)"],GREEN,F_GRN);
+ box(470,240,136,60,"XADC wrapper (new)",["adc_sample / adc_done","adc_data"],ORG,F_ORG);
+
+ // analog
+ box(666,50,104,58,"Quad DAC",["4 weight voltages","≤ ~1 V"],ORG,F_ORG);
+ box(666,150,104,70,"4 × SPDT switch",["S1: weight → node","S2: → ground"],GREEN,F_GRN);
+ box(800,150,86,70,"4 × Rf 10 kΩ",["into common","node"],GREEN,F_GRN);
+ box(906,150,76,70,"Σ node",["Cf 100 nF","Rl 1 MΩ","τ ≈ 252 µs"],GREEN,F_GRN);
+ box(906,250,76,52,"Buffer",["op-amp","follower"],ORG,F_ORG);
+ T2(821,342,"node → buffer → XADC input (JXADC header)",{"font-size":9});
+
+ // links
+ arrow("M144,100H175V72H206",PUR,"UART",176,64);
+ arrow("M326,72H350V150H326",BLUE,null);
+ arrow("M326,150H470",PUR,null);
+ arrow("M326,238H350V180H470",BLUE,"pwm[3:0]",410,174);
+ arrow("M326,160H440V90H470",ORG,"weights_dac",405,100);
+ arrow("M606,90H636V79H666",ORG,"SDA/SCL",636,70);
+ arrow("M606,180H640V185H666",GREEN,"gate",628,198);
+ arrow("M718,108V150",ORG,"Vw",730,132);
+ arrow("M770,185H800",GREEN,null);
+ arrow("M886,185H906",GREEN,null);
+ arrow("M944,220V250",ORG,null);
+ arrow("M906,276H630V270H606",ORG,"to XADC",740,292);
+ arrow("M470,270H440V176H326",ORG,"sum_pos, sum_neg",385,262);
+})();
 render(0);
 </script></body></html>

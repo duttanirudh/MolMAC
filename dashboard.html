@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Hybrid analog MAC - molecule dashboard</title>
+<style>
+ :root{--bg:#0d1117;--fg:#d6deeb;--bar:#161b22;--panel:#10151d;--line:#2a313c;--btn:#21262d;--btnb:#444c56;--mut:#8b96a5}
+ body.light{--bg:#eef1f5;--fg:#1f2933;--bar:#e1e6ed;--panel:#ffffff;--line:#c5ccd6;--btn:#ffffff;--btnb:#aab3c0;--mut:#5b6675}
+ body{margin:0;background:var(--bg);color:var(--fg);font-family:Segoe UI,Arial,sans-serif}
+ #bar{padding:8px 12px;background:var(--bar);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+ button,select{background:var(--btn);color:var(--fg);border:1px solid var(--btnb);border-radius:6px;padding:5px 10px;cursor:pointer}
+ button.on{border-color:#4fa3ff;font-weight:600}
+ #legend{padding:4px 12px;font-size:12px;line-height:1.5}
+ #pipe{display:flex;flex-wrap:wrap;gap:6px;padding:4px 12px 2px}
+ .chip{font-size:12px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;color:var(--mut);background:var(--panel)}
+ #wrap{display:flex;gap:12px;padding:10px;align-items:flex-start;flex-wrap:wrap}
+ #left{display:flex;flex-direction:column;gap:8px}
+ #left table{margin:0;width:100%;background:var(--panel)}
+ #side{display:flex;flex-direction:column;gap:8px}
+ canvas,#mol,#arch,#gallery{background:var(--panel);border:1px solid var(--line);border-radius:6px}
+ #right{width:440px;display:flex;flex-direction:column;gap:8px}
+ #status{font-size:14px;min-height:70px}
+ #log{margin:0;padding:8px;background:var(--panel);border:1px solid var(--line);border-radius:6px;font-size:12px;height:340px;overflow:auto;white-space:pre-wrap}
+ table{border-collapse:collapse;margin:10px 12px;font-size:13px}
+ td,th{border:1px solid var(--line);padding:3px 9px;text-align:right}
+ tr:last-child td{font-weight:600}
+ .flow{stroke-dasharray:4 4;animation:fl .8s linear infinite}
+ @keyframes fl{to{stroke-dashoffset:-8}}
+ @media (prefers-reduced-motion:reduce){.flow{animation:none}}
+ #guide{display:none;max-width:1000px;padding:10px 16px}
+ #guide h2{margin:18px 0 6px;font-size:18px}
+ .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+ .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.45}
+ .card b{display:block;margin-bottom:3px;font-size:14px}
+ .big{font-size:22px;font-weight:600}
+ .mut{color:var(--mut)}
+</style></head><body>
+<div id="bar">
+ <b id="title"></b>
+ <button id="tabsim" class="on">Simulation</button><button id="tabguide">Guide &amp; summary</button>
+ <button id="tabproto">Prototype build</button>
+ <span id="ctl" style="display:contents">
+ <button id="play">▶ Play</button><button id="back">◀ Step</button><button id="fwd">Step ▶</button>
+ <select id="mode"><option value="stage">every stage</option><option value="iter">one frame per iteration</option></select>
+ <label>delay <input id="speed" type="range" min="20" max="1000" value="250"> <span id="spv">250</span> ms</label>
+ <button id="nextorb">Next orbital ⏭</button>
+ <input id="scrub" type="range" min="0" value="0" style="width:240px">
+ </span>
+ <button id="theme"></button>
+</div>
+
+<div id="simview">
+<div id="legend"></div>
+<div id="pipe"></div>
+<div id="wrap">
+ <div id="left"><svg id="arch"></svg>
+  <div class="mut" style="font-size:13px">Result of this run</div>
+  <table id="result"></table></div>
+ <div id="side"><svg id="mol" width="330" height="300"></svg>
+  <svg id="gallery"></svg>
+  <canvas id="levels" width="330" height="230"></canvas>
+  <canvas id="conv" width="330" height="150"></canvas></div>
+ <div id="right"><div id="status"></div><pre id="log"></pre></div></div>
+</div>
+
+<div id="guide">
+ <h2>Result of this run</h2>
+ <div class="cards" id="sumcards"></div>
+ <p class="mut" id="sumnote"></p>
+
+ <h2>What each part of the circuit does</h2>
+ <div class="cards">
+  <div class="card"><b>Activation vector (VECTOR REG)</b>The current guess v for the orbital: one number per atom. PWM duty cannot be negative, so the controller splits v into a positive part v⁺ and a negative part v⁻ and runs them as two separate passes.</div>
+  <div class="card"><b>PWM timers</b>Turn each number into a duty cycle: a 255-clock square wave that is high for D clocks. Larger |v| gives a wider pulse (the small waveform under each timer shows it). One timer group per 4-input tile.</div>
+  <div class="card"><b>Weight shift registers and DAC</b>The Hückel adjacency matrix A (1 = bonded atoms) is stored as 8-bit codes, loaded 32 bits at a time per tile, MSB first. A DAC turns each code into a fixed voltage.</div>
+  <div class="card"><b>Analog cell array (switches)</b>Each cell is a switch that connects its DAC voltage to the wire only while its PWM is high. Averaged over time that gives voltage × duty = weight × activation, so one cell is one multiplier. The lever closes when the cell is conducting.</div>
+  <div class="card"><b>Σ summing node and RC filter</b>Four cells share one node through resistors and a capacitor. The node adds their products and smooths out the PWM ripple. It needs about 8 time constants (≈2 ms) to settle, which sets the speed of the whole machine.</div>
+  <div class="card"><b>ADC</b>Digitises each tile's node voltage into a signed code. Quantisation and read noise enter here.</div>
+  <div class="card"><b>Accumulate (outputs)</b>Digital adders sum a row's tile codes into one output y<sub>r</sub> = Σ A<sub>rj</sub>·v<sub>j</sub>. All rows together are one matrix-vector product.</div>
+  <div class="card"><b>Digital controller</b>Combines y⁺ − y⁻, adds the shift s·v digitally, removes orbitals already found (Gram-Schmidt), normalises, and checks whether the vector has stopped changing (Δ below the tolerance). The result feeds back as the next v.</div>
+ </div>
+
+ <h2>What the side panels show</h2>
+ <div class="cards">
+  <div class="card"><b>Stage strip</b>The chips above the circuit show which of the eight stages is active right now. Moving dashes on a wire mean that wire is carrying signal in that stage.</div>
+  <div class="card"><b>Molecule</b>Each carbon carries one amplitude of the current orbital estimate. Blue = positive, red = negative, size = |amplitude|. A green bond means the two neighbours are in phase (bonding); a red dashed bond means out of phase. More out-of-phase bonds means a higher-energy orbital.</div>
+  <div class="card"><b>Finished orbitals</b>A thumbnail of each converged orbital with its analog x. Each holds two electrons (↑↓).</div>
+  <div class="card"><b>π levels</b>Energy ladder in units of |β|. Dashed = exact level, green = level found by the analog machine. Energy is α + xβ with β negative, so larger x means lower energy.</div>
+  <div class="card"><b>Convergence</b>log10 of how far the vector moved in each iteration. The orbital is finished when it falls below the dashed tolerance line.</div>
+ </div>
+
+ <h2>How to read the numbers</h2>
+ <div class="cards">
+  <div class="card"><b>Analog x vs refined x</b>Analog x is the eigenvalue estimate read from the analog passes, so it carries gain mismatch, ADC and noise error. Refined x recomputes the Rayleigh quotient digitally on the same final vector. It stays accurate (about 1e-4) even when the analog value is off, which shows the vector itself is good.</div>
+  <div class="card"><b>Shift s</b>The array holds A. The digital side adds s·v so the iteration converges on the occupied (largest) orbitals. Doing this digitally, not in the array, cut the benzene error about 2.8×.</div>
+  <div class="card"><b>What this is not</b>A classical hybrid analog-digital simulation of a toy Hamiltonian, not quantum hardware and not chemical accuracy. Offset and noise sizes are placeholders; only the 1.7 % gain mismatch comes from the paper. Python models every row and tile as a parallel analog node, while the Verilog FSM drives one tile at a time.</div>
+ </div>
+</div>
+<div id="proto" style="display:none;max-width:1040px;padding:10px 16px">
+ <h2 style="margin:10px 0 6px;font-size:18px">Prototype: one tile on an FPGA board, controlled from a PC</h2>
+ <p class="mut" style="font-size:13px;margin:0 0 8px">Matches the simulated chain: shift register → DAC → PWM-gated switches → Rf/Cf summing node → ADC. The Verilog in <code>mac_ctrl.v</code> / <code>mac_fsm.v</code> is reused; the DAC driver, XADC wrapper and UART are new.</p>
+ <svg id="psvg" width="1000" height="400" style="background:var(--panel);border:1px solid var(--line);border-radius:6px;max-width:100%"></svg>
+
+ <h2 style="margin:18px 0 6px;font-size:18px">Parts (starting points, check datasheets)</h2>
+ <table style="margin:0;background:var(--panel)">
+  <tr><th style="text-align:left">Block</th><th style="text-align:left">Option</th><th style="text-align:left">Why / catch</th></tr>
+  <tr><td style="text-align:left">Digital core</td><td style="text-align:left">Digilent Basys 3 (Artix-7)</td><td style="text-align:left">Already your Vivado target; 100 MHz clock, XADC inputs on the JXADC header</td></tr>
+  <tr><td style="text-align:left">Weight DAC</td><td style="text-align:left">Quad DAC breakout, e.g. MCP4728 (12-bit, I²C)</td><td style="text-align:left">One chip covers the 4 cells of a tile. Use the top 8 bits to match the model's 8-bit codes. Weights are DC, so speed doesn't matter</td></tr>
+  <tr><td style="text-align:left">Analog switches</td><td style="text-align:left">SPDT analog switches rated for 3.3 V, e.g. ADG1236 or 74HC4053 class</td><td style="text-align:left">Model uses Ron = 80 Ω. Real Ron varies with signal voltage, which is a new error source the simulation doesn't have</td></tr>
+  <tr><td style="text-align:left">Summing node</td><td style="text-align:left">4 × 10 kΩ 0.1 % into 100 nF (C0G/film), 1 MΩ load</td><td style="text-align:left">τ ≈ 252 µs as in the netlist. Avoid X7R: its capacitance shifts with voltage</td></tr>
+  <tr><td style="text-align:left">Buffer</td><td style="text-align:left">Rail-to-rail op-amp follower</td><td style="text-align:left">The node impedance is about 2.5 kΩ, which is high for an ADC input. The buffer adds its own offset</td></tr>
+  <tr><td style="text-align:left">ADC</td><td style="text-align:left">Basys 3 XADC (12-bit, 0–1 V), or a Pmod ADC</td><td style="text-align:left">XADC is unipolar and 0–1 V, so keep weight voltages at or below about 1 V. Hardware passes are always non-negative (v⁺ and v⁻ run separately), so the model's signed ADC is not needed</td></tr>
+  <tr><td style="text-align:left">Host link</td><td style="text-align:left">USB-UART on the board + a Python script</td><td style="text-align:left">The script reuses the <code>mol_engine.py</code> controller code, with the analog pass replaced by a UART call</td></tr>
+ </table>
+
+ <h2 style="margin:18px 0 6px;font-size:18px">Build order</h2>
+ <div class="cards">
+  <div class="card"><b>1. Analog bench</b>Breadboard one tile: DAC, switches, 4 × Rf, Cf. Drive the switches from the FPGA with the existing <code>mac_ctrl</code> PWM. Check the settled node voltage against your SPICE result (about 0.27 V for your test weights).</div>
+  <div class="card"><b>2. Read it</b>Add an XADC wrapper and a UART. Confirm that pass A and pass B differ by the predicted amount, and that the read repeats to a few LSB.</div>
+  <div class="card"><b>3. Close the loop</b>Run <code>mac_fsm</code> jobs from the PC for one matvec, then a full benzene run. Compare the energy error to the Python error budget.</div>
+  <div class="card"><b>4. Scale up</b>Only after 1–3 work: several tiles in parallel, a PCB, or a SKY130 version.</div>
+ </div>
+
+ <h2 style="margin:18px 0 6px;font-size:18px">Things that will bite</h2>
+ <div class="cards">
+  <div class="card"><b>Switch dead time</b>The netlist drives S1 and S2 with ideal complementary pulses. Real switches can overlap for a few ns and short the DAC to ground through two Ron. The FPGA must generate a gap between PWM and its complement. <code>mac_ctrl.v</code> has none today.</div>
+  <div class="card"><b>DAC update path is new</b><code>mac_fsm</code> exposes <code>weights_dac</code> (32 bits) but nothing yet turns it into I²C or SPI traffic. That driver is new Verilog and needs its own testbench.</div>
+  <div class="card"><b>Placeholders become real</b>Offset and noise in the model are guesses. On hardware they are measured: switch charge injection, buffer offset, XADC noise. The first bench result replaces them.</div>
+  <div class="card"><b>Repeated reads</b>The FSM reads in consecutive PWM periods, about 10 µs apart on a 252 µs filter, so the noise samples are probably correlated. Averaging helps less on hardware than the model assumes.</div>
+  <div class="card"><b>Clock</b>Run the design from 25 MHz (10.2 µs PWM period, 198 settle periods) as the handoff proposes. At 100 MHz you need 791 settle periods.</div>
+ </div>
+</div>
+
+<div id="proto" style="display:none;max-width:1040px;padding:10px 16px">
+ <h2 style="margin:10px 0 6px;font-size:18px">Prototype: one tile on an FPGA board, controlled from a PC</h2>
+ <p class="mut" style="font-size:13px;margin:0 0 8px">Matches the simulated chain: shift register → DAC → PWM-gated switches → Rf/Cf summing node → ADC. The Verilog in <code>mac_ctrl.v</code> / <code>mac_fsm.v</code> is reused; the DAC driver, XADC wrapper and UART are new.</p>
+ <svg id="psvg" width="1000" height="400" style="background:var(--panel);border:1px solid var(--line);border-radius:6px;max-width:100%"></svg>
+
+ <h2 style="margin:18px 0 6px;font-size:18px">Parts (starting points, check datasheets)</h2>
+ <table style="margin:0;background:var(--panel)">
+  <tr><th style="text-align:left">Block</th><th style="text-align:left">Option</th><th style="text-align:left">Why / catch</th></tr>
+  <tr><td style="text-align:left">Digital core</td><td style="text-align:left">Digilent Basys 3 (Artix-7)</td><td style="text-align:left">Already your Vivado target; 100 MHz clock, XADC inputs on the JXADC header</td></tr>
+  <tr><td style="text-align:left">Weight DAC</td><td style="text-align:left">Quad DAC breakout, e.g. MCP4728 (12-bit, I²C)</td><td style="text-align:left">One chip covers the 4 cells of a tile. Use the top 8 bits to match the model's 8-bit codes. Weights are DC, so speed doesn't matter</td></tr>
+  <tr><td style="text-align:left">Analog switches</td><td style="text-align:left">SPDT analog switches rated for 3.3 V, e.g. ADG1236 or 74HC4053 class</td><td style="text-align:left">Model uses Ron = 80 Ω. Real Ron varies with signal voltage, which is a new error source the simulation doesn't have</td></tr>
+  <tr><td style="text-align:left">Summing node</td><td style="text-align:left">4 × 10 kΩ 0.1 % into 100 nF (C0G/film), 1 MΩ load</td><td style="text-align:left">τ ≈ 252 µs as in the netlist. Avoid X7R: its capacitance shifts with voltage</td></tr>
+  <tr><td style="text-align:left">Buffer</td><td style="text-align:left">Rail-to-rail op-amp follower</td><td style="text-align:left">The node impedance is about 2.5 kΩ, which is high for an ADC input. The buffer adds its own offset</td></tr>
+  <tr><td style="text-align:left">ADC</td><td style="text-align:left">Basys 3 XADC (12-bit, 0–1 V), or a Pmod ADC</td><td style="text-align:left">XADC is unipolar and 0–1 V, so keep weight voltages at or below about 1 V. Hardware passes are always non-negative (v⁺ and v⁻ run separately), so the model's signed ADC is not needed</td></tr>
+  <tr><td style="text-align:left">Host link</td><td style="text-align:left">USB-UART on the board + a Python script</td><td style="text-align:left">The script reuses the <code>mol_engine.py</code> controller code, with the analog pass replaced by a UART call</td></tr>
+ </table>
+
+ <h2 style="margin:18px 0 6px;font-size:18px">Build order</h2>
+ <div class="cards">
+  <div class="card"><b>1. Analog bench</b>Breadboard one tile: DAC, switches, 4 × Rf, Cf. Drive the switches from the FPGA with the existing <code>mac_ctrl</code> PWM. Check the settled node voltage against your SPICE result (about 0.27 V for your test weights).</div>
+  <div class="card"><b>2. Read it</b>Add an XADC wrapper and a UART. Confirm that pass A and pass B differ by the predicted amount, and that the read repeats to a few LSB.</div>
+  <div class="card"><b>3. Close the loop</b>Run <code>mac_fsm</code> jobs from the PC for one matvec, then a full benzene run. Compare the energy error to the Python error budget.</div>
+  <div class="card"><b>4. Scale up</b>Only after 1–3 work: several tiles in parallel, a PCB, or a SKY130 version.</div>
+ </div>
+
+ <h2 style="margin:18px 0 6px;font-size:18px">Things that will bite</h2>
+ <div class="cards">
+  <div class="card"><b>Switch dead time</b>The netlist drives S1 and S2 with ideal complementary pulses. Real switches can overlap for a few ns and short the DAC to ground through two Ron. The FPGA must generate a gap between PWM and its complement. <code>mac_ctrl.v</code> has none today.</div>
+  <div class="card"><b>DAC update path is new</b><code>mac_fsm</code> exposes <code>weights_dac</code> (32 bits) but nothing yet turns it into I²C or SPI traffic. That driver is new Verilog and needs its own testbench.</div>
+  <div class="card"><b>Placeholders become real</b>Offset and noise in the model are guesses. On hardware they are measured: switch charge injection, buffer offset, XADC noise. The first bench result replaces them.</div>
+  <div class="card"><b>Repeated reads</b>The FSM reads in consecutive PWM periods, about 10 µs apart on a 252 µs filter, so the noise samples are probably correlated. Averaging helps less on hardware than the model assumes.</div>
+  <div class="card"><b>Clock</b>Run the design from 25 MHz (10.2 µs PWM period, 198 settle periods) as the handoff proposes. At 100 MHz you need 791 settle periods.</div>
+ </div>
+</div>
+<script>
+const TRACE = {"meta": {"name": "benzene", "n": 6, "tile": 4, "nt": 2, "s": 2, "wscale": 1.0, "fs": 2.1, "top": 511, "wl": 255, "dmax": 255, "wcode": [[0, 255, 0, 0, 0, 255], [255, 0, 255, 0, 0, 0], [0, 255, 0, 255, 0, 0], [0, 0, 255, 0, 255, 0], [0, 0, 0, 255, 0, 255], [255, 0, 0, 0, 255, 0]], "edges": [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 0]], "coords": [[1.0, 0.0], [0.5000000000000001, 0.8660254037844386], [-0.4999999999999998, 0.8660254037844387], [-1.0, 1.2246467991473532e-16], [-0.5000000000000004, -0.8660254037844385], [0.5000000000000001, -0.8660254037844386]], "exact": [2.0000000000000004, 1.0, 0.9999999999999996, -1.0, -1.0000000000000002, -1.9999999999999996], "cfg": {"w_bits": 8, "a_bits": 8, "adc_bits": 10, "tile": 4, "gain_sigma": 0.017, "offset_sigma": 0.002, "noise_sigma": 0.003, "rf": 10000.0, "ron": 80.0, "rl": 1000000.0, "cf": 1e-07, "settle_taus": 8.0, "pwm_period_us": 10.0, "tol": 0.005, "max_iter": 150, "seed": 1, "digital_shift": true, "calibrate": "none", "cal_reads": 16, "headroom": 1.0, "matvec_reads": 1, "settle_mem": false, "read_order": "alt", "ripple": false, "ripple_phase": 0.0}, "tau_us": 252.0, "pass_us": 2026.0, "gain_rms": 0.011928047061296887, "cal": null}, "events": [{"t": "load", "row": 0, "words": ["0000ff00", "0000ff00"], "cycles": 32}, {"t": "load", "row": 1, "words": ["00ff00ff", "00000000"], "cycles": 32}, {"t": "load", "row": 2, "words": ["ff00ff00", "00000000"], "cycles": 32}, {"t": "load", "row": 3, "words": ["00ff0000", "000000ff"], "cycles": 32}, {"t": "load", "row": 4, "words": ["ff000000", "0000ff00"], "cycles": 32}, {"t": "load", "row": 5, "words": ["000000ff", "000000ff"], "cycles": 32}, {"t": "iter", "orb": 0, "it": 0, "v": [0.6033, -0.7554, 0.1236, -0.1678, -0.1338, -0.0637], "vmax": 0.755422673604714, "passes": [{"sign": "+", "duty": [204, 0, 42, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.805, 0.0, 0.1648, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.1642, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.7833, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.0035, 0.0004], [0.9661, -0.0179], [0.0137, 0.0049], [0.1654, 0.0004], [0.0053, -0.0034], [0.7822, -0.0031]], "code": [[1, 0], [235, -4], [3, 1], [40, 0], [1, -1], [190, -1]], "rowsum": [0.0041, 0.9493, 0.0164, 0.1644, 0.0, 0.7767]}, {"sign": "-", "duty": [0, 255, 0, 57, 45, 22], "prod": [[0.0, 1.014, 0.0, 0.0, 0.0, 0.0869], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.995, 0.0, 0.2226, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.1771, 0.0], [0.0, 0.0, 0.0, 0.226, 0.0, 0.0839], [0.0, 0.0, 0.0, 0.0, 0.1762, 0.0]], "node": [[1.0118, 0.0855], [0.004, -0.0039], [1.2207, -0.0056], [0.0043, 0.167], [0.2342, 0.0847], [-0.003, 0.1769]], "code": [[246, 21], [1, -1], [297, -1], [1, 41], [57, 21], [-1, 43]], "rowsum": [1.0973, 0.0, 1.2164, 0.1726, 0.3205, 0.1726]}], "y": [0.3787, -0.7919, -0.6616, -0.3419, -0.5104, 0.3301], "vn": [0.2909, -0.6083, -0.5083, -0.2626, -0.3921, 0.2535], "change": 0.8335397504621525, "lam_x": -1.1504785437927794, "t_us": 4052.0}, {"t": "iter", "orb": 0, "it": 1, "v": [0.2909, -0.6083, -0.5083, -0.2626, -0.3921, 0.2535], "vmax": 0.6083438168077122, "passes": [{"sign": "+", "duty": [122, 0, 0, 0, 0, 106], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.4188], [0.4814, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.404], [0.4684, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[-0.0037, 0.4261], [0.4938, -0.0131], [-0.0074, -0.011], [0.0086, -0.0035], [0.0101, 0.4073], [0.4635, 0.0004]], "code": [[-1, 104], [120, -3], [-2, -3], [2, -1], [2, 99], [113, 0]], "rowsum": [0.4233, 0.4808, -0.0205, 0.0041, 0.4151, 0.4644]}, {"sign": "-", "duty": [0, 255, 213, 110, 164, 0], "prod": [[0.0, 1.014, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.8357, 0.0, 0.0, 0.0], [0.0, 0.995, 0.0, 0.4295, 0.0, 0.0], [0.0, 0.0, 0.8328, 0.0, 0.6455, 0.0], [0.0, 0.0, 0.0, 0.4362, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6421, 0.0]], "node": [[1.0128, 0.0088], [0.8281, -0.0058], [1.4253, 0.0088], [0.8296, 0.6331], [0.4354, 0.0057], [-0.0064, 0.6471]], "code": [[246, 2], [202, -1], [347, 2], [202, 154], [106, 1], [-2, 157]], "rowsum": [1.0192, 0.826, 1.4342, 1.463, 0.4397, 0.637]}], "y": [0.2184, -1.4272, -1.9038, -1.415, -0.7992, 0.4018], "vn": [0.0749, -0.4892, -0.6526, -0.485, -0.2739, 0.1377], "change": 0.39813915340621314, "lam_x": 0.6861929712020154, "t_us": 8104.0}, {"t": "iter", "orb": 0, "it": 2, "v": [0.0749, -0.4892, -0.6526, -0.485, -0.2739, 0.1377], "vmax": 0.6525514752165239, "passes": [{"sign": "+", "duty": [29, 0, 0, 0, 0, 54], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.2134], [0.1144, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.2058], [0.1114, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[-0.0089, 0.2232], [0.1216, -0.0118], [0.0038, 0.0053], [0.004, 0.0017], [0.0179, 0.2069], [0.1044, -0.0059]], "code": [[-2, 54], [30, -3], [1, 1], [1, 0], [4, 50], [25, -1]], "rowsum": [0.2137, 0.111, 0.0082, 0.0041, 0.2219, 0.0986]}, {"sign": "-", "duty": [0, 191, 255, 190, 107, 0], "prod": [[0.0, 0.7595, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.7453, 0.0, 0.7418, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.4211, 0.0], [0.0, 0.0, 0.0, 0.7535, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.4189, 0.0]], "node": [[0.7638, 0.0024], [0.9982, -0.0039], [1.4902, -0.0084], [0.9889, 0.4012], [0.7625, 0.0004], [0.0041, 0.4165]], "code": [[186, 1], [243, -1], [363, -2], [241, 98], [186, 0], [1, 101]], "rowsum": [0.7685, 0.9945, 1.4836, 1.3932, 0.7644, 0.4192]}], "y": [-0.2132, -1.5564, -2.2703, -1.8787, -0.9027, 0.0658], "vn": [-0.0616, -0.4498, -0.6562, -0.543, -0.2609, 0.019], "change": 0.19446565417925013, "lam_x": 1.3944927925571942, "t_us": 12156.0}, {"t": "iter", "orb": 0, "it": 3, "v": [-0.0616, -0.4498, -0.6562, -0.543, -0.2609, 0.019], "vmax": 0.6561624626792251, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 7], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0277], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0267], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[-0.0021, 0.034], [0.0008, -0.0108], [-0.0024, 0.0086], [0.0056, -0.0018], [0.002, 0.0224], [0.0004, -0.0019]], "code": [[-1, 8], [0, -3], [-1, 2], [1, 0], [0, 5], [0, 0]], "rowsum": [0.0288, -0.0123, 0.0041, 0.0041, 0.0205, 0.0]}, {"sign": "-", "duty": [24, 175, 255, 211, 101, 0], "prod": [[0.0, 0.6959, 0.0, 0.0, 0.0, 0.0], [0.0947, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.6829, 0.0, 0.8238, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.3975, 0.0], [0.0, 0.0, 0.0, 0.8368, 0.0, 0.0], [0.0922, 0.0, 0.0, 0.0, 0.3954, 0.0]], "node": [[0.6919, 0.0028], [1.0883, -0.0021], [1.5126, -0.007], [1.0066, 0.3882], [0.8393, -0.0051], [0.0856, 0.3935]], "code": [[168, 1], [265, -1], [368, -2], [245, 94], [204, -1], [21, 96]], "rowsum": [0.6945, 1.0849, 1.5041, 1.3932, 0.8342, 0.4808]}], "y": [-0.5612, -1.6215, -2.299, -1.9997, -1.0571, -0.2783], "vn": [-0.1532, -0.4426, -0.6275, -0.5458, -0.2885, -0.076], "change": 0.13799376478916744, "lam_x": 1.6289457563985188, "t_us": 16208.0}, {"t": "iter", "orb": 0, "it": 4, "v": [-0.1532, -0.4426, -0.6275, -0.5458, -0.2885, -0.076], "vmax": 0.6274988662781172, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[-0.0002, -0.0007], [-0.0028, -0.0082], [-0.0065, -0.0036], [0.0059, 0.0012], [0.0075, 0.0147], [-0.0031, -0.004]], "code": [[0, 0], [-1, -2], [-2, -1], [1, 0], [2, 4], [-1, -1]], "rowsum": [0.0, -0.0123, -0.0123, 0.0041, 0.0247, -0.0082]}, {"sign": "-", "duty": [62, 180, 255, 222, 117, 31], "prod": [[0.0, 0.7157, 0.0, 0.0, 0.0, 0.1225], [0.2446, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.7024, 0.0, 0.8668, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.4605, 0.0], [0.0, 0.0, 0.0, 0.8804, 0.0, 0.1182], [0.2381, 0.0, 0.0, 0.0, 0.4581, 0.0]], "node": [[0.7275, 0.1195], [1.2491, -0.009], [1.5703, -0.0138], [1.0034, 0.4541], [0.876, 0.1279], [0.2371, 0.4559]], "code": [[177, 29], [304, -2], [382, -3], [244, 110], [213, 31], [58, 111]], "rowsum": [0.8466, 1.2411, 1.5575, 1.4548, 1.0027, 0.6945]}], "y": [-0.8389, -1.6736, -2.2426, -2.0042, -1.1923, -0.594], "vn": [-0.2216, -0.4422, -0.5925, -0.5295, -0.315, -0.1569], "change": 0.11592695160284143, "lam_x": 1.7594426149267894, "t_us": 20260.0}, {"t": "iter", "orb": 0, "it": 5, "v": [-0.2216, -0.4422, -0.5925, -0.5295, -0.315, -0.1569], "vmax": 0.5925076254724788, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[-0.0021, 0.0033], [0.0003, 0.0011], [0.0077, -0.006], [0.0002, -0.0075], [-0.0044, -0.0036], [-0.0055, 0.0029]], "code": [[-1, 1], [0, 0], [2, -1], [0, -2], [-1, -1], [-1, 1]], "rowsum": [0.0, 0.0, 0.0041, -0.0082, -0.0082, 0.0]}, {"sign": "-", "duty": [95, 190, 255, 228, 136, 68], "prod": [[0.0, 0.7555, 0.0, 0.0, 0.0, 0.2687], [0.3749, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.7414, 0.0, 0.8902, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.5353, 0.0], [0.0, 0.0, 0.0, 0.9042, 0.0, 0.2592], [0.3648, 0.0, 0.0, 0.0, 0.5324, 0.0]], "node": [[0.7639, 0.2667], [1.3765, -0.0059], [1.6429, -0.0023], [1.0011, 0.524], [0.9007, 0.2597], [0.3566, 0.532]], "code": [[186, 65], [335, -1], [400, -1], [244, 128], [219, 63], [87, 129]], "rowsum": [1.0315, 1.3726, 1.6397, 1.5288, 1.1589, 0.8877]}], "y": [-1.056, -1.6997, -2.1566, -1.972, -1.3233, -0.8411], "vn": [-0.2726, -0.4388, -0.5568, -0.5091, -0.3417, -0.2172], "change": 0.09295412183220372, "lam_x": 1.8565873853461485, "t_us": 24312.0}, {"t": "iter", "orb": 0, "it": 6, "v": [-0.2726, -0.4388, -0.5568, -0.5091, -0.3417, -0.2172], "vmax": 0.5567761130663983, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[-0.007, 0.0075], [-0.0041, 0.0071], [0.0012, 0.0046], [-0.0049, -0.0017], [-0.0017, -0.003], [-0.0048, -0.0032]], "code": [[-2, 2], [-1, 2], [0, 1], [-1, 0], [0, -1], [-1, -1]], "rowsum": [0.0, 0.0041, 0.0041, -0.0041, -0.0041, -0.0082]}, {"sign": "-", "duty": [125, 201, 255, 233, 156, 99], "prod": [[0.0, 0.7992, 0.0, 0.0, 0.0, 0.3912], [0.4932, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.7843, 0.0, 0.9097, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.614, 0.0], [0.0, 0.0, 0.0, 0.924, 0.0, 0.3774], [0.48, 0.0, 0.0, 0.0, 0.6107, 0.0]], "node": [[0.8012, 0.3982], [1.4952, -0.0038], [1.6845, -0.0068], [0.9969, 0.5954], [0.9299, 0.3749], [0.4723, 0.6136]], "code": [[195, 97], [364, -1], [410, -2], [243, 145], [226, 91], [115, 149]], "rowsum": [1.2, 1.4918, 1.6767, 1.5945, 1.3027, 1.0849]}], "y": [-1.2151, -1.708, -2.0472, -1.9106, -1.4128, -1.0445], "vn": [-0.3104, -0.4364, -0.523, -0.4881, -0.3609, -0.2668], "change": 0.07652691638602842, "lam_x": 1.9028620572908004, "t_us": 28364.0}, {"t": "iter", "orb": 0, "it": 7, "v": [-0.3104, -0.4364, -0.523, -0.4881, -0.3609, -0.2668], "vmax": 0.522993065634834, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.0064, 0.0049], [-0.0047, -0.0014], [0.005, -0.0073], [0.0098, -0.0012], [-0.0082, 0.0007], [-0.0126, 0.0056]], "code": [[2, 1], [-1, 0], [1, -2], [2, 0], [-2, 0], [-3, 1]], "rowsum": [0.0123, -0.0041, -0.0041, 0.0082, -0.0082, -0.0082]}, {"sign": "-", "duty": [151, 213, 255, 238, 176, 130], "prod": [[0.0, 0.847, 0.0, 0.0, 0.0, 0.5137], [0.5958, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.8311, 0.0, 0.9293, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.6927, 0.0], [0.0, 0.0, 0.0, 0.9439, 0.0, 0.4955], [0.5798, 0.0, 0.0, 0.0, 0.689, 0.0]], "node": [[0.852, 0.5093], [1.5883, -0.0027], [1.7575, 0.0071], [1.0025, 0.685], [0.9486, 0.482], [0.5752, 0.6913]], "code": [[207, 124], [386, -1], [428, 2], [244, 167], [231, 117], [140, 168]], "rowsum": [1.3603, 1.5822, 1.7671, 1.689, 1.4301, 1.2658]}], "y": [-1.3276, -1.7044, -1.9747, -1.8575, -1.476, -1.2016], "vn": [-0.3357, -0.431, -0.4993, -0.4697, -0.3732, -0.3039], "change": 0.05557215989247239, "lam_x": 1.9485792267737834, "t_us": 32416.0}, {"t": "iter", "orb": 0, "it": 8, "v": [-0.3357, -0.431, -0.4993, -0.4697, -0.3732, -0.3039], "vmax": 0.4993223567264376, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.0013, -0.0007], [0.0047, 0.0085], [0.0042, -0.0087], [0.0122, -0.0156], [0.0067, -0.0036], [0.0006, -0.0064]], "code": [[0, 0], [1, 2], [1, -2], [3, -4], [2, -1], [0, -2]], "rowsum": [0.0, 0.0123, -0.0041, -0.0041, 0.0041, -0.0082]}, {"sign": "-", "duty": [171, 220, 255, 240, 191, 155], "prod": [[0.0, 0.8748, 0.0, 0.0, 0.0, 0.6125], [0.6747, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.8585, 0.0, 0.9371, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.7517, 0.0], [0.0, 0.0, 0.0, 0.9518, 0.0, 0.5908], [0.6566, 0.0, 0.0, 0.0, 0.7478, 0.0]], "node": [[0.8829, 0.6163], [1.6619, -0.0151], [1.792, 0.0058], [0.9988, 0.746], [0.9516, 0.5937], [0.6522, 0.7463]], "code": [[215, 150], [404, -4], [436, 1], [243, 182], [232, 144], [159, 182]], "rowsum": [1.5, 1.6438, 1.7959, 1.7466, 1.5452, 1.4014]}], "y": [-1.4223, -1.6787, -1.8997, -1.8157, -1.5179, -1.3133], "vn": [-0.3581, -0.4226, -0.4783, -0.4572, -0.3822, -0.3307], "change": 0.0443717414233129, "lam_x": 1.9679086575488736, "t_us": 36468.0}, {"t": "iter", "orb": 0, "it": 9, "v": [-0.3581, -0.4226, -0.4783, -0.4572, -0.3822, -0.3307], "vmax": 0.4782922042782605, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[-0.0035, 0.0107], [0.0095, -0.0111], [0.0167, 0.0023], [0.0006, -0.0157], [0.0076, 0.0033], [-0.0086, -0.012]], "code": [[-1, 3], [2, -3], [4, 1], [0, -4], [2, 1], [-2, -3]], "rowsum": [0.0082, -0.0041, 0.0205, -0.0164, 0.0123, -0.0205]}, {"sign": "-", "duty": [191, 225, 255, 244, 204, 176], "prod": [[0.0, 0.8947, 0.0, 0.0, 0.0, 0.6954], [0.7537, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.878, 0.0, 0.9527, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.8029, 0.0], [0.0, 0.0, 0.0, 0.9676, 0.0, 0.6709], [0.7334, 0.0, 0.0, 0.0, 0.7987, 0.0]], "node": [[0.9016, 0.6937], [1.7482, 0.0138], [1.8417, 0.0037], [0.9953, 0.8005], [0.9552, 0.6697], [0.722, 0.7877]], "code": [[219, 169], [425, 3], [448, 1], [242, 195], [232, 163], [176, 192]], "rowsum": [1.5945, 1.7589, 1.8452, 1.7959, 1.6233, 1.5123]}], "y": [-1.4768, -1.6907, -1.8315, -1.7833, -1.5368, -1.3963], "vn": [-0.3705, -0.4242, -0.4595, -0.4474, -0.3856, -0.3503], "change": 0.03166741424097954, "lam_x": 1.9836429945163205, "t_us": 40520.0}, {"t": "iter", "orb": 0, "it": 10, "v": [-0.3705, -0.4242, -0.4595, -0.4474, -0.3856, -0.3503], "vmax": 0.45952531378405154, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[-0.0071, 0.0067], [0.0018, -0.0023], [0.008, -0.0071], [-0.0039, -0.0149], [0.0016, 0.0045], [-0.0059, 0.0026]], "code": [[-2, 2], [0, -1], [2, -2], [-1, -4], [0, 1], [-1, 1]], "rowsum": [0.0, -0.0041, 0.0, -0.0205, 0.0041, 0.0]}, {"sign": "-", "duty": [206, 235, 255, 248, 214, 194], "prod": [[0.0, 0.9344, 0.0, 0.0, 0.0, 0.7666], [0.8128, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.917, 0.0, 0.9683, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.8423, 0.0], [0.0, 0.0, 0.0, 0.9835, 0.0, 0.7395], [0.791, 0.0, 0.0, 0.0, 0.8378, 0.0]], "node": [[0.9274, 0.7654], [1.8055, -0.0108], [1.8946, 0.0031], [0.9935, 0.8313], [0.9844, 0.7289], [0.7866, 0.8267]], "code": [[226, 186], [439, -3], [461, 1], [242, 202], [240, 177], [191, 201]], "rowsum": [1.6932, 1.7918, 1.8986, 1.8247, 1.7137, 1.611]}], "y": [-1.5211, -1.6757, -1.7937, -1.7449, -1.5587, -1.4428], "vn": [-0.3815, -0.4203, -0.4499, -0.4377, -0.391, -0.3619], "change": 0.022050536332840383, "lam_x": 1.985915548939425, "t_us": 44572.0}, {"t": "iter", "orb": 0, "it": 11, "v": [-0.3815, -0.4203, -0.4499, -0.4377, -0.391, -0.3619], "vmax": 0.4499046102803558, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.0002, -0.0026], [-0.0016, -0.0113], [-0.0065, -0.0078], [-0.0006, -0.0061], [0.0041, 0.0091], [-0.0001, -0.0028]], "code": [[0, -1], [0, -3], [-2, -2], [0, -1], [1, 2], [0, -1]], "rowsum": [-0.0041, -0.0123, -0.0164, -0.0041, 0.0123, -0.0041]}, {"sign": "-", "duty": [216, 238, 255, 248, 222, 205], "prod": [[0.0, 0.9464, 0.0, 0.0, 0.0, 0.81], [0.8523, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.9287, 0.0, 0.9683, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.8738, 0.0], [0.0, 0.0, 0.0, 0.9835, 0.0, 0.7814], [0.8294, 0.0, 0.0, 0.0, 0.8691, 0.0]], "node": [[0.9507, 0.8074], [1.8581, 0.0], [1.887, 0.0025], [1.0029, 0.8512], [0.9802, 0.7765], [0.8107, 0.8593]], "code": [[231, 196], [452, 0], [459, 1], [244, 207], [239, 189], [197, 209]], "rowsum": [1.7548, 1.8575, 1.8904, 1.8534, 1.7589, 1.6685]}], "y": [-1.5564, -1.684, -1.7599, -1.7132, -1.5697, -1.4782], "vn": [-0.3898, -0.4218, -0.4408, -0.4291, -0.3932, -0.3703], "change": 0.017385151301561638, "lam_x": 1.9917869484190693, "t_us": 48624.0}, {"t": "iter", "orb": 0, "it": 12, "v": [-0.3898, -0.4218, -0.4408, -0.4291, -0.3932, -0.3703], "vmax": 0.4408064596559586, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[-0.0033, 0.0066], [0.0031, 0.0125], [0.0006, 0.0049], [0.004, -0.0027], [-0.0033, -0.0115], [-0.0096, 0.0033]], "code": [[-1, 2], [1, 3], [0, 1], [1, -1], [-1, -3], [-2, 1]], "rowsum": [0.0041, 0.0164, 0.0041, 0.0, -0.0164, -0.0041]}, {"sign": "-", "duty": [226, 244, 255, 248, 227, 214], "prod": [[0.0, 0.9702, 0.0, 0.0, 0.0, 0.8456], [0.8918, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.9521, 0.0, 0.9683, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.8934, 0.0], [0.0, 0.0, 0.0, 0.9835, 0.0, 0.8157], [0.8678, 0.0, 0.0, 0.0, 0.8887, 0.0]], "node": [[0.9797, 0.8506], [1.8918, -0.0083], [1.9277, 0.0061], [0.9949, 0.8866], [0.9787, 0.8224], [0.863, 0.8846]], "code": [[238, 207], [460, -2], [469, 1], [242, 216], [238, 200], [210, 215]], "rowsum": [1.8288, 1.8822, 1.9315, 1.8822, 1.8, 1.7466]}], "y": [-1.586, -1.6681, -1.7334, -1.69, -1.5891, -1.5142], "vn": [-0.3968, -0.4173, -0.4337, -0.4228, -0.3976, -0.3788], "change": 0.015867057487818234, "lam_x": 1.9965502428756667, "t_us": 52676.0}, {"t": "iter", "orb": 0, "it": 13, "v": [-0.3968, -0.4173, -0.4337, -0.4228, -0.3976, -0.3788], "vmax": 0.4336602301826972, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.0048, 0.0062], [-0.0012, -0.0107], [-0.0048, -0.0124], [0.0063, 0.009], [-0.0065, 0.0007], [-0.0025, -0.0072]], "code": [[1, 2], [0, -3], [-1, -3], [2, 2], [-2, 0], [-1, -2]], "rowsum": [0.0123, -0.0123, -0.0164, 0.0164, -0.0082, -0.0123]}, {"sign": "-", "duty": [233, 245, 255, 249, 234, 223], "prod": [[0.0, 0.9742, 0.0, 0.0, 0.0, 0.8811], [0.9194, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.956, 0.0, 0.9722, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.921, 0.0], [0.0, 0.0, 0.0, 0.9875, 0.0, 0.85], [0.8947, 0.0, 0.0, 0.0, 0.9161, 0.0]], "node": [[0.9754, 0.8759], [1.9235, -0.0068], [1.9269, 0.0021], [0.9955, 0.9036], [0.9855, 0.8524], [0.8869, 0.9139]], "code": [[237, 213], [468, -2], [469, 1], [242, 220], [240, 207], [216, 222]], "rowsum": [1.8493, 1.9151, 1.9315, 1.8986, 1.837, 1.8]}], "y": [-1.5922, -1.6726, -1.7142, -1.6639, -1.5973, -1.5456], "vn": [-0.3983, -0.4184, -0.4288, -0.4162, -0.3996, -0.3866], "change": 0.011626663554017487, "lam_x": 1.9972351661631649, "t_us": 56728.0}, {"t": "iter", "orb": 0, "it": 14, "v": [-0.3983, -0.4184, -0.4288, -0.4162, -0.3996, -0.3866], "vmax": 0.4288163328555383, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[-0.0041, 0.0044], [0.0057, -0.0031], [0.0144, -0.0033], [-0.0027, -0.014], [0.0106, -0.0004], [0.0011, 0.0015]], "code": [[-1, 1], [1, -1], [3, -1], [-1, -3], [3, 0], [0, 0]], "rowsum": [0.0, 0.0, 0.0082, -0.0164, 0.0123, 0.0]}, {"sign": "-", "duty": [237, 249, 255, 248, 238, 230], "prod": [[0.0, 0.9901, 0.0, 0.0, 0.0, 0.9088], [0.9352, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.9716, 0.0, 0.9683, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.9367, 0.0], [0.0, 0.0, 0.0, 0.9835, 0.0, 0.8767], [0.91, 0.0, 0.0, 0.0, 0.9318, 0.0]], "node": [[0.9997, 0.9177], [1.9298, -0.0016], [1.9445, -0.0094], [1.0067, 0.9374], [0.9906, 0.8732], [0.9045, 0.9215]], "code": [[243, 223], [470, 0], [473, -2], [245, 228], [241, 212], [220, 224]], "rowsum": [1.9151, 1.9315, 1.9356, 1.9438, 1.8616, 1.8247]}], "y": [-1.6199, -1.6672, -1.6862, -1.6752, -1.5942, -1.5577], "vn": [-0.4047, -0.4165, -0.4213, -0.4185, -0.3983, -0.3892], "change": 0.01071176633672931, "lam_x": 2.002375600128042, "t_us": 60780.0}, {"t": "iter", "orb": 0, "it": 15, "v": [-0.4047, -0.4165, -0.4213, -0.4185, -0.3983, -0.3892], "vmax": 0.42127933458665323, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.0027, 0.0], [0.0018, -0.0062], [0.0046, 0.0051], [-0.0043, 0.0013], [-0.0083, -0.013], [-0.0057, -0.0012]], "code": [[1, 0], [0, -2], [1, 1], [-1, 0], [-2, -3], [-1, 0]], "rowsum": [0.0041, -0.0082, 0.0082, -0.0041, -0.0205, -0.0041]}, {"sign": "-", "duty": [245, 252, 255, 253, 241, 236], "prod": [[0.0, 1.002, 0.0, 0.0, 0.0, 0.9325], [0.9667, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.9833, 0.0, 0.9878, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.9485, 0.0], [0.0, 0.0, 0.0, 1.0033, 0.0, 0.8996], [0.9407, 0.0, 0.0, 0.0, 0.9435, 0.0]], "node": [[1.0046, 0.9238], [1.9632, -0.0025], [1.9766, -0.0026], [1.0012, 0.936], [1.0034, 0.8945], [0.9376, 0.934]], "code": [[244, 225], [478, -1], [481, -1], [244, 228], [244, 218], [228, 227]], "rowsum": [1.9274, 1.9603, 1.9726, 1.9397, 1.8986, 1.8699]}], "y": [-1.6217, -1.6644, -1.6722, -1.658, -1.6071, -1.5698], "vn": [-0.4055, -0.4162, -0.4181, -0.4146, -0.4019, -0.3925], "change": 0.007087119696218631, "lam_x": 1.998963226022787, "t_us": 64832.0}, {"t": "iter", "orb": 0, "it": 16, "v": [-0.4055, -0.4162, -0.4181, -0.4146, -0.4019, -0.3925], "vmax": 0.4181474587271311, "passes": [{"sign": "+", "duty": [0, 0, 0, 0, 0, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[-0.0026, 0.007], [0.012, -0.001], [0.0047, -0.0041], [0.01, -0.001], [0.0141, 0.0019], [-0.0107, -0.0047]], "code": [[-1, 2], [3, 0], [1, -1], [2, 0], [3, 0], [-3, -1]], "rowsum": [0.0041, 0.0123, 0.0, 0.0082, 0.0123, -0.0164]}, {"sign": "-", "duty": [247, 254, 255, 253, 245, 239], "prod": [[0.0, 1.01, 0.0, 0.0, 0.0, 0.9444], [0.9746, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.9911, 0.0, 0.9878, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.9643, 0.0], [0.0, 0.0, 0.0, 1.0033, 0.0, 0.911], [0.9484, 0.0, 0.0, 0.0, 0.9592, 0.0]], "node": [[1.0039, 0.9381], [1.979, 0.0016], [1.9695, 0.0087], [0.9995, 0.9518], [1.0068, 0.9082], [0.9364, 0.9439]], "code": [[244, 228], [482, 0], [479, 2], [243, 232], [245, 221], [228, 230]], "rowsum": [1.9397, 1.9808, 1.9767, 1.9521, 1.9151, 1.8822]}], "y": [-1.6225, -1.6576, -1.6649, -1.6441, -1.6014, -1.581], "vn": [-0.4066, -0.4155, -0.4173, -0.4121, -0.4014, -0.3963], "change": 0.004801543522765277, "lam_x": 1.9897971349034234, "t_us": 68884.0}, {"t": "done", "orb": 0, "x_analog": 1.9970453203514176, "x_refined": 1.9996430609191682, "x_exact": 2.0000000000000004, "iters": 17, "vec": [-0.4066, -0.4155, -0.4173, -0.4121, -0.4014, -0.3963], "t_us": 68884.0}, {"t": "iter", "orb": 1, "it": 0, "v": [-0.5076, -0.0621, -0.2199, 0.824, 0.0521, -0.092], "vmax": 0.8239539585465309, "passes": [{"sign": "+", "duty": [0, 0, 0, 255, 16, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9956, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.063, 0.0], [0.0, 0.0, 0.0, 1.0113, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0626, 0.0]], "node": [[0.0026, 0.0053], [-0.0142, 0.0001], [0.9998, -0.0048], [0.0042, 0.0568], [1.0074, -0.0022], [0.0031, 0.0525]], "code": [[1, 1], [-3, 0], [243, -1], [1, 14], [245, -1], [1, 13]], "rowsum": [0.0082, -0.0123, 0.9945, 0.0616, 1.0027, 0.0575]}, {"sign": "-", "duty": [157, 19, 68, 0, 0, 28], "prod": [[0.0, 0.0756, 0.0, 0.0, 0.0, 0.1106], [0.6195, 0.0, 0.2668, 0.0, 0.0, 0.0], [0.0, 0.0741, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.2659, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.1067], [0.6028, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.0792, 0.115], [0.8811, -0.0059], [0.0685, -0.0071], [0.2688, -0.0023], [-0.0017, 0.1247], [0.5929, -0.0005]], "code": [[19, 28], [214, -1], [17, -2], [65, -1], [0, 30], [144, 0]], "rowsum": [0.1932, 0.8753, 0.0616, 0.263, 0.1233, 0.5918]}], "y": [-1.168, -0.8574, 0.3307, 1.4816, 0.8307, -0.6252], "vn": [-0.4993, -0.3666, 0.1407, 0.6321, 0.3542, -0.2675], "change": 0.6178351680174029, "lam_x": -0.10500360945818499, "t_us": 72936.0}, {"t": "iter", "orb": 1, "it": 1, "v": [-0.4993, -0.3666, 0.1407, 0.6321, 0.3542, -0.2675], "vmax": 0.6320886889892247, "passes": [{"sign": "+", "duty": [0, 0, 57, 255, 143, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.2236, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9956, 0.0, 0.0], [0.0, 0.0, 0.2229, 0.0, 0.5628, 0.0], [0.0, 0.0, 0.0, 1.0113, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.5598, 0.0]], "node": [[0.001, 0.0012], [0.2322, -0.0061], [1.0041, 0.0048], [0.2195, 0.5633], [1.0085, 0.0163], [-0.0073, 0.5515]], "code": [[0, 0], [56, -1], [244, 1], [53, 137], [245, 4], [-2, 134]], "rowsum": [0.0, 0.226, 1.0068, 0.7808, 1.0233, 0.5425]}, {"sign": "-", "duty": [201, 148, 0, 0, 0, 108], "prod": [[0.0, 0.5885, 0.0, 0.0, 0.0, 0.4267], [0.7931, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.5775, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.4117], [0.7718, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.5779, 0.4215], [0.7889, -0.0093], [0.5716, -0.0062], [0.0023, 0.0044], [-0.0066, 0.4072], [0.7591, -0.0103]], "code": [[141, 103], [192, -2], [139, -2], [1, 1], [-2, 99], [185, -3]], "rowsum": [1.0027, 0.7808, 0.563, 0.0082, 0.3986, 0.7479]}], "y": [-1.6339, -1.0848, 0.5626, 1.7538, 1.1042, -0.6652], "vn": [-0.5507, -0.3667, 0.1855, 0.5848, 0.3672, -0.2259], "change": 0.09374452217347812, "lam_x": 0.9701867158673108, "t_us": 76988.0}, {"t": "iter", "orb": 1, "it": 2, "v": [-0.5507, -0.3667, 0.1855, 0.5848, 0.3672, -0.2259], "vmax": 0.5848312627737113, "passes": [{"sign": "+", "duty": [0, 0, 81, 255, 160, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3178, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9956, 0.0, 0.0], [0.0, 0.0, 0.3167, 0.0, 0.6297, 0.0], [0.0, 0.0, 0.0, 1.0113, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6264, 0.0]], "node": [[-0.0052, -0.0019], [0.3226, -0.0044], [0.9928, 0.0017], [0.3211, 0.6225], [1.0147, -0.0051], [-0.0012, 0.6264]], "code": [[-1, 0], [78, -1], [242, 0], [78, 151], [247, -1], [0, 152]], "rowsum": [-0.0041, 0.3164, 0.9945, 0.9411, 1.011, 0.6247]}, {"sign": "-", "duty": [240, 160, 0, 0, 0, 98], "prod": [[0.0, 0.6362, 0.0, 0.0, 0.0, 0.3872], [0.947, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6243, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3735], [0.9215, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6345, 0.3825], [0.955, -0.0027], [0.644, -0.0059], [0.0086, -0.0069], [0.0052, 0.3775], [0.9094, -0.0019]], "code": [[154, 93], [232, -1], [157, -1], [2, -2], [1, 92], [221, 0]], "rowsum": [1.0151, 0.9493, 0.6411, 0.0, 0.3822, 0.9082]}], "y": [-1.6989, -1.1044, 0.5782, 1.7214, 1.103, -0.618], "vn": [-0.5661, -0.3679, 0.1929, 0.5739, 0.3678, -0.2058], "change": 0.0285458820904887, "lam_x": 0.999171558281438, "t_us": 81040.0}, {"t": "iter", "orb": 1, "it": 3, "v": [-0.5661, -0.3679, 0.1929, 0.5739, 0.3678, -0.2058], "vmax": 0.5739046544589023, "passes": [{"sign": "+", "duty": [0, 0, 86, 255, 163, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3374, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9956, 0.0, 0.0], [0.0, 0.0, 0.3363, 0.0, 0.6415, 0.0], [0.0, 0.0, 0.0, 1.0113, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6381, 0.0]], "node": [[0.0033, 0.0042], [0.3414, 0.0029], [1.0011, -0.0004], [0.3368, 0.6289], [1.008, -0.0033], [-0.0009, 0.6331]], "code": [[1, 1], [83, 1], [244, 0], [82, 153], [245, -1], [0, 154]], "rowsum": [0.0082, 0.3452, 1.0027, 0.9658, 1.0027, 0.6329]}, {"sign": "-", "duty": [252, 163, 0, 0, 0, 91], "prod": [[0.0, 0.6481, 0.0, 0.0, 0.0, 0.3596], [0.9944, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.636, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3469], [0.9676, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6414, 0.366], [0.9883, -0.0079], [0.636, 0.0008], [-0.011, -0.011], [0.0047, 0.3437], [0.955, -0.0045]], "code": [[156, 89], [240, -2], [155, 0], [-3, -3], [1, 84], [232, -1]], "rowsum": [1.0068, 0.9781, 0.637, -0.0247, 0.3493, 0.9493]}], "y": [-1.7067, -1.1, 0.5962, 1.7176, 1.1115, -0.5937], "vn": [-0.5706, -0.3686, 0.1963, 0.5698, 0.368, -0.1999], "change": 0.009207021881087006, "lam_x": 1.0025735802207265, "t_us": 85092.0}, {"t": "iter", "orb": 1, "it": 4, "v": [-0.5706, -0.3686, 0.1963, 0.5698, 0.368, -0.1999], "vmax": 0.5706107361796475, "passes": [{"sign": "+", "duty": [0, 0, 88, 255, 164, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3453, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9956, 0.0, 0.0], [0.0, 0.0, 0.3441, 0.0, 0.6455, 0.0], [0.0, 0.0, 0.0, 1.0113, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6421, 0.0]], "node": [[0.0107, 0.0008], [0.35, 0.0015], [0.9934, 0.0007], [0.344, 0.6359], [1.0056, 0.0052], [-0.0074, 0.6359]], "code": [[3, 0], [85, 0], [242, 0], [84, 155], [245, 1], [-2, 155]], "rowsum": [0.0123, 0.3493, 0.9945, 0.9822, 1.011, 0.6288]}, {"sign": "-", "duty": [255, 165, 0, 0, 0, 89], "prod": [[0.0, 0.6561, 0.0, 0.0, 0.0, 0.3517], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6438, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3392], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6501, 0.3652], [1.0094, -0.0041], [0.641, -0.0112], [0.0053, -0.0026], [-0.0048, 0.3453], [0.9763, -0.007]], "code": [[158, 89], [246, -1], [156, -3], [1, -1], [-1, 84], [238, -2]], "rowsum": [1.0151, 1.0068, 0.6288, 0.0, 0.3411, 0.9699]}], "y": [-1.7148, -1.1134, 0.6018, 1.7014, 1.1192, -0.5949], "vn": [-0.571, -0.371, 0.1993, 0.565, 0.3714, -0.1986], "change": 0.007174202028902931, "lam_x": 1.0071717048556188, "t_us": 89144.0}, {"t": "iter", "orb": 1, "it": 5, "v": [-0.571, -0.371, 0.1993, 0.565, 0.3714, -0.1986], "vmax": 0.5710167365278102, "passes": [{"sign": "+", "duty": [0, 0, 89, 252, 166, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3492, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9839, 0.0, 0.0], [0.0, 0.0, 0.348, 0.0, 0.6533, 0.0], [0.0, 0.0, 0.0, 0.9994, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6499, 0.0]], "node": [[-0.001, 0.001], [0.3506, -0.0041], [0.9745, 0.0068], [0.3525, 0.655], [1.008, -0.0013], [-0.0029, 0.6514]], "code": [[0, 0], [85, -1], [237, 2], [86, 159], [245, 0], [-1, 159]], "rowsum": [0.0, 0.3452, 0.9822, 1.0068, 1.0068, 0.6493]}, {"sign": "-", "duty": [255, 166, 0, 0, 0, 89], "prod": [[0.0, 0.6601, 0.0, 0.0, 0.0, 0.3517], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6477, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3392], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6654, 0.3534], [1.0012, -0.0031], [0.6442, -0.0053], [-0.0087, -0.0038], [-0.0025, 0.335], [0.9714, 0.0006]], "code": [[162, 86], [244, -1], [157, -1], [-2, -1], [-1, 82], [236, 0]], "rowsum": [1.0192, 0.9986, 0.6411, -0.0123, 0.3329, 0.9699]}], "y": [-1.7255, -1.1161, 0.5939, 1.7134, 1.1286, -0.5807], "vn": [-0.5728, -0.3711, 0.1951, 0.5657, 0.3722, -0.1937], "change": 0.00677532831505365, "lam_x": 1.0202045966936768, "t_us": 93196.0}, {"t": "iter", "orb": 1, "it": 6, "v": [-0.5728, -0.3711, 0.1951, 0.5657, 0.3722, -0.1937], "vmax": 0.5728271482547236, "passes": [{"sign": "+", "duty": [0, 0, 87, 252, 166, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3413, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9839, 0.0, 0.0], [0.0, 0.0, 0.3402, 0.0, 0.6533, 0.0], [0.0, 0.0, 0.0, 0.9994, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6499, 0.0]], "node": [[0.0137, 0.0048], [0.3333, -0.0025], [0.9808, 0.0004], [0.3387, 0.6432], [0.9975, -0.0038], [-0.0159, 0.643]], "code": [[3, 1], [81, -1], [239, 0], [82, 157], [243, -1], [-4, 156]], "rowsum": [0.0164, 0.3288, 0.9822, 0.9822, 0.9945, 0.6247]}, {"sign": "-", "duty": [255, 165, 0, 0, 0, 86], "prod": [[0.0, 0.6561, 0.0, 0.0, 0.0, 0.3398], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6438, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3278], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6567, 0.3497], [1.0032, -0.0055], [0.6486, 0.0012], [0.0131, -0.0008], [0.0035, 0.3349], [0.9809, -0.0041]], "code": [[160, 85], [244, -1], [158, 0], [3, 0], [1, 82], [239, -1]], "rowsum": [1.0068, 0.9986, 0.6493, 0.0123, 0.3411, 0.9781]}], "y": [-1.7144, -1.1269, 0.5813, 1.6885, 1.1196, -0.5905], "vn": [-0.5699, -0.374, 0.1954, 0.5644, 0.3747, -0.1953], "change": 0.005291601231661913, "lam_x": 0.9999186826279551, "t_us": 97248.0}, {"t": "iter", "orb": 1, "it": 7, "v": [-0.5699, -0.374, 0.1954, 0.5644, 0.3747, -0.1953], "vmax": 0.5699016301113212, "passes": [{"sign": "+", "duty": [0, 0, 87, 253, 168, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3413, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9878, 0.0, 0.0], [0.0, 0.0, 0.3402, 0.0, 0.6612, 0.0], [0.0, 0.0, 0.0, 1.0033, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6577, 0.0]], "node": [[0.0033, -0.0065], [0.3396, -0.0086], [0.987, -0.0049], [0.3418, 0.6546], [1.0074, 0.0013], [-0.0084, 0.6471]], "code": [[1, -2], [83, -2], [240, -1], [83, 159], [245, 0], [-2, 157]], "rowsum": [-0.0041, 0.3329, 0.9822, 0.9945, 1.0068, 0.637]}, {"sign": "-", "duty": [255, 167, 0, 0, 0, 87], "prod": [[0.0, 0.664, 0.0, 0.0, 0.0, 0.3438], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6516, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3316], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6722, 0.355], [1.0022, 0.0001], [0.6438, -0.0114], [0.0019, 0.0045], [-0.0026, 0.3257], [0.9813, -0.0126]], "code": [[164, 86], [244, 0], [157, -3], [0, 1], [-1, 79], [239, -3]], "rowsum": [1.0274, 1.0027, 0.6329, 0.0041, 0.3205, 0.9699]}], "y": [-1.7291, -1.1308, 0.5903, 1.6947, 1.1416, -0.5808], "vn": [-0.5722, -0.3742, 0.1954, 0.5609, 0.3778, -0.1922], "change": 0.006098431045139219, "lam_x": 1.0214704579769487, "t_us": 101300.0}, {"t": "iter", "orb": 1, "it": 8, "v": [-0.5722, -0.3742, 0.1954, 0.5609, 0.3778, -0.1922], "vmax": 0.5722491932613132, "passes": [{"sign": "+", "duty": [0, 0, 87, 250, 168, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3413, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9761, 0.0, 0.0], [0.0, 0.0, 0.3402, 0.0, 0.6612, 0.0], [0.0, 0.0, 0.0, 0.9914, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6577, 0.0]], "node": [[0.0063, 0.0065], [0.3405, -0.0021], [0.9923, -0.0088], [0.3409, 0.6538], [0.9885, -0.0081], [0.0046, 0.6561]], "code": [[2, 2], [83, -1], [241, -2], [83, 159], [241, -2], [1, 160]], "rowsum": [0.0164, 0.337, 0.9822, 0.9945, 0.9822, 0.6616]}, {"sign": "-", "duty": [255, 167, 0, 0, 0, 86], "prod": [[0.0, 0.664, 0.0, 0.0, 0.0, 0.3398], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6516, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3278], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6542, 0.3383], [1.0074, -0.0009], [0.6443, -0.0026], [0.0051, -0.0019], [0.006, 0.316], [0.9828, 0.0]], "code": [[159, 82], [245, 0], [157, -1], [1, 0], [1, 77], [239, 0]], "rowsum": [0.9904, 1.0068, 0.6411, 0.0041, 0.3205, 0.9822]}], "y": [-1.7033, -1.1327, 0.5865, 1.69, 1.1353, -0.5683], "vn": [-0.569, -0.3788, 0.1944, 0.5623, 0.3774, -0.1906], "change": 0.0061254206965842785, "lam_x": 0.9992580971104754, "t_us": 105352.0}, {"t": "iter", "orb": 1, "it": 9, "v": [-0.569, -0.3788, 0.1944, 0.5623, 0.3774, -0.1906], "vmax": 0.5690202328661703, "passes": [{"sign": "+", "duty": [0, 0, 87, 252, 169, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3413, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9839, 0.0, 0.0], [0.0, 0.0, 0.3402, 0.0, 0.6652, 0.0], [0.0, 0.0, 0.0, 0.9994, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6616, 0.0]], "node": [[0.0132, 0.0207], [0.3408, -0.0107], [0.9896, -0.0031], [0.3401, 0.653], [1.0106, -0.0027], [-0.0134, 0.656]], "code": [[3, 5], [83, -3], [241, -1], [83, 159], [246, -1], [-3, 160]], "rowsum": [0.0329, 0.3288, 0.9863, 0.9945, 1.0068, 0.6452]}, {"sign": "-", "duty": [255, 170, 0, 0, 0, 85], "prod": [[0.0, 0.676, 0.0, 0.0, 0.0, 0.3359], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6634, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.324], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6697, 0.3395], [1.0024, -0.0096], [0.6682, -0.0059], [0.0079, 0.0033], [0.0015, 0.3192], [0.9729, 0.0041]], "code": [[163, 83], [244, -2], [163, -1], [2, 1], [0, 78], [237, 1]], "rowsum": [1.011, 0.9945, 0.6658, 0.0123, 0.3205, 0.9781]}], "y": [-1.696, -1.1374, 0.5716, 1.6849, 1.1463, -0.571], "vn": [-0.5667, -0.3803, 0.1902, 0.5618, 0.382, -0.1912], "change": 0.0068696283110351, "lam_x": 0.9958926306022895, "t_us": 109404.0}, {"t": "iter", "orb": 1, "it": 10, "v": [-0.5667, -0.3803, 0.1902, 0.5618, 0.382, -0.1912], "vmax": 0.566689533706923, "passes": [{"sign": "+", "duty": [0, 0, 86, 253, 172, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3374, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9878, 0.0, 0.0], [0.0, 0.0, 0.3363, 0.0, 0.677, 0.0], [0.0, 0.0, 0.0, 1.0033, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6734, 0.0]], "node": [[0.0024, 0.0044], [0.3377, -0.0014], [0.992, -0.0062], [0.336, 0.6712], [1.0005, 0.0007], [-0.0018, 0.6703]], "code": [[1, 1], [82, 0], [241, -2], [82, 163], [243, 0], [0, 163]], "rowsum": [0.0082, 0.337, 0.9822, 1.0068, 0.9986, 0.6699]}, {"sign": "-", "duty": [255, 171, 0, 0, 0, 86], "prod": [[0.0, 0.68, 0.0, 0.0, 0.0, 0.3398], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6673, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3278], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.677, 0.3379], [1.0155, 0.002], [0.6618, -0.0071], [0.0148, 0.0048], [0.0044, 0.3338], [0.9628, -0.0012]], "code": [[165, 82], [247, 0], [161, -2], [4, 1], [1, 81], [234, 0]], "rowsum": [1.0151, 1.0151, 0.6534, 0.0205, 0.337, 0.9616]}], "y": [-1.7054, -1.1458, 0.5671, 1.6839, 1.1399, -0.5481], "vn": [-0.5693, -0.3826, 0.1891, 0.5618, 0.3803, -0.1831], "change": 0.00904333349456674, "lam_x": 0.996240348263735, "t_us": 113456.0}, {"t": "iter", "orb": 1, "it": 11, "v": [-0.5693, -0.3826, 0.1891, 0.5618, 0.3803, -0.1831], "vmax": 0.5693380986936709, "passes": [{"sign": "+", "duty": [0, 0, 85, 252, 170, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3335, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9839, 0.0, 0.0], [0.0, 0.0, 0.3323, 0.0, 0.6691, 0.0], [0.0, 0.0, 0.0, 0.9994, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6656, 0.0]], "node": [[0.0068, -0.0076], [0.3292, 0.0014], [0.9912, -0.0056], [0.3368, 0.6727], [0.9982, -0.0081], [-0.0054, 0.6603]], "code": [[2, -2], [80, 0], [241, -1], [82, 164], [243, -2], [-1, 161]], "rowsum": [0.0, 0.3288, 0.9863, 1.011, 0.9904, 0.6575]}, {"sign": "-", "duty": [255, 171, 0, 0, 0, 82], "prod": [[0.0, 0.68, 0.0, 0.0, 0.0, 0.324], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6673, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3126], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6884, 0.3277], [1.0001, 0.0111], [0.6655, 0.0008], [0.0076, 0.0004], [0.0047, 0.3152], [0.9713, -0.0098]], "code": [[168, 80], [243, 3], [162, 0], [2, 0], [1, 77], [236, -2]], "rowsum": [1.0192, 1.011, 0.6658, 0.0082, 0.3205, 0.9616]}], "y": [-1.7204, -1.1545, 0.5611, 1.6959, 1.1428, -0.5398], "vn": [-0.5707, -0.3829, 0.1864, 0.563, 0.3794, -0.1789], "change": 0.005351877820850266, "lam_x": 1.0134620388409519, "t_us": 117508.0}, {"t": "iter", "orb": 1, "it": 12, "v": [-0.5707, -0.3829, 0.1864, 0.563, 0.3794, -0.1789], "vmax": 0.5706980685544242, "passes": [{"sign": "+", "duty": [0, 0, 83, 252, 170, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3256, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9839, 0.0, 0.0], [0.0, 0.0, 0.3245, 0.0, 0.6691, 0.0], [0.0, 0.0, 0.0, 0.9994, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6656, 0.0]], "node": [[0.0011, 0.0024], [0.325, -0.0025], [0.9806, 0.0059], [0.3366, 0.6499], [1.0006, -0.0043], [-0.0206, 0.6651]], "code": [[0, 1], [79, -1], [239, 1], [82, 158], [243, -1], [-5, 162]], "rowsum": [0.0041, 0.3205, 0.9863, 0.9863, 0.9945, 0.6452]}, {"sign": "-", "duty": [255, 171, 0, 0, 0, 80], "prod": [[0.0, 0.68, 0.0, 0.0, 0.0, 0.3161], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6673, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3049], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6769, 0.3166], [1.001, 0.0032], [0.6759, -0.0003], [0.0077, -0.005], [0.0045, 0.2996], [0.9719, -0.0055]], "code": [[165, 77], [244, 1], [164, 0], [2, -1], [1, 73], [236, -1]], "rowsum": [0.9945, 1.0068, 0.674, 0.0041, 0.3041, 0.9658]}], "y": [-1.708, -1.1585, 0.5515, 1.6879, 1.1539, -0.5413], "vn": [-0.568, -0.3852, 0.1837, 0.5617, 0.384, -0.1798], "change": 0.006607077065404501, "lam_x": 1.0061107968379148, "t_us": 121560.0}, {"t": "iter", "orb": 1, "it": 13, "v": [-0.568, -0.3852, 0.1837, 0.5617, 0.384, -0.1798], "vmax": 0.5679675916044907, "passes": [{"sign": "+", "duty": [0, 0, 82, 252, 172, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3217, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9839, 0.0, 0.0], [0.0, 0.0, 0.3206, 0.0, 0.677, 0.0], [0.0, 0.0, 0.0, 0.9994, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6734, 0.0]], "node": [[0.0046, 0.0085], [0.3241, 0.0038], [1.0005, -0.0146], [0.3234, 0.6676], [0.9978, -0.0082], [-0.0047, 0.6689]], "code": [[1, 2], [79, 1], [243, -4], [79, 162], [243, -2], [-1, 163]], "rowsum": [0.0123, 0.3288, 0.9822, 0.9904, 0.9904, 0.6658]}, {"sign": "-", "duty": [255, 173, 0, 0, 0, 81], "prod": [[0.0, 0.6879, 0.0, 0.0, 0.0, 0.3201], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6751, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3087], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6848, 0.3213], [1.0014, -0.0173], [0.6828, -0.0038], [-0.0022, -0.0024], [-0.0003, 0.2948], [0.977, -0.0113]], "code": [[167, 78], [244, -4], [166, -1], [-1, -1], [0, 72], [238, -3]], "rowsum": [1.0068, 0.9863, 0.6781, -0.0082, 0.2959, 0.9658]}], "y": [-1.7022, -1.1447, 0.5405, 1.692, 1.1636, -0.5305], "vn": [-0.5691, -0.3832, 0.1786, 0.5624, 0.3863, -0.1784], "change": 0.006236117857510183, "lam_x": 0.9996184076333123, "t_us": 125612.0}, {"t": "iter", "orb": 1, "it": 14, "v": [-0.5691, -0.3832, 0.1786, 0.5624, 0.3863, -0.1784], "vmax": 0.5690624883908622, "passes": [{"sign": "+", "duty": [0, 0, 80, 252, 173, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.3139, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9839, 0.0, 0.0], [0.0, 0.0, 0.3128, 0.0, 0.6809, 0.0], [0.0, 0.0, 0.0, 0.9994, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.6773, 0.0]], "node": [[0.0011, 0.0043], [0.3225, 0.0039], [0.9854, -0.0066], [0.313, 0.6814], [1.0112, 0.0032], [-0.0089, 0.6805]], "code": [[0, 1], [78, 1], [240, -2], [76, 166], [246, 1], [-2, 166]], "rowsum": [0.0041, 0.3247, 0.9781, 0.9945, 1.0151, 0.674]}, {"sign": "-", "duty": [255, 172, 0, 0, 0, 80], "prod": [[0.0, 0.6839, 0.0, 0.0, 0.0, 0.3161], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6712, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3049], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6823, 0.3164], [1.0033, 0.0003], [0.674, 0.004], [0.0113, -0.0012], [-0.0103, 0.2939], [0.9726, -0.0016]], "code": [[166, 77], [244, 0], [164, 1], [3, 0], [-3, 72], [237, 0]], "rowsum": [0.9986, 1.0027, 0.6781, 0.0123, 0.2836, 0.974]}], "y": [-1.7055, -1.1533, 0.5283, 1.6852, 1.19, -0.528], "vn": [-0.5683, -0.3848, 0.1741, 0.5587, 0.3941, -0.1769], "change": 0.009992641366253432, "lam_x": 1.0085936304688055, "t_us": 129664.0}, {"t": "iter", "orb": 1, "it": 15, "v": [-0.5683, -0.3848, 0.1741, 0.5587, 0.3941, -0.1769], "vmax": 0.5682731582062849, "passes": [{"sign": "+", "duty": [0, 0, 78, 251, 177, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.306, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.98, 0.0, 0.0], [0.0, 0.0, 0.305, 0.0, 0.6966, 0.0], [0.0, 0.0, 0.0, 0.9954, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.693, 0.0]], "node": [[0.0153, 0.0034], [0.3056, 0.0024], [0.9869, -0.0034], [0.3106, 0.6838], [0.9909, 0.0073], [-0.0134, 0.6955]], "code": [[4, 1], [74, 1], [240, -1], [76, 166], [241, 2], [-3, 169]], "rowsum": [0.0205, 0.3082, 0.9822, 0.9945, 0.9986, 0.6822]}, {"sign": "-", "duty": [255, 173, 0, 0, 0, 79], "prod": [[0.0, 0.6879, 0.0, 0.0, 0.0, 0.3122], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6751, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3011], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6926, 0.3196], [1.0104, 0.0001], [0.6634, -0.008], [-0.0001, 0.0012], [-0.0031, 0.2961], [0.9695, 0.0066]], "code": [[169, 78], [246, 0], [161, -2], [0, 0], [-1, 72], [236, 2]], "rowsum": [1.0151, 1.011, 0.6534, 0.0, 0.2918, 0.9781]}], "y": [-1.7031, -1.1699, 0.5355, 1.6839, 1.1909, -0.5223], "vn": [-0.5664, -0.3895, 0.1763, 0.5574, 0.3939, -0.1746], "change": 0.0061486000531135515, "lam_x": 1.013676831891408, "t_us": 133716.0}, {"t": "iter", "orb": 1, "it": 16, "v": [-0.5664, -0.3895, 0.1763, 0.5574, 0.3939, -0.1746], "vmax": 0.5664355630245353, "passes": [{"sign": "+", "duty": [0, 0, 79, 251, 177, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.31, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.98, 0.0, 0.0], [0.0, 0.0, 0.3089, 0.0, 0.6966, 0.0], [0.0, 0.0, 0.0, 0.9954, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.693, 0.0]], "node": [[-0.0063, -0.0046], [0.3142, -0.016], [0.9825, -0.0047], [0.3022, 0.6881], [0.9906, 0.0009], [-0.0028, 0.6989]], "code": [[-2, -1], [76, -4], [239, -1], [74, 167], [241, 0], [-1, 170]], "rowsum": [-0.0123, 0.2959, 0.9781, 0.9904, 0.9904, 0.6945]}, {"sign": "-", "duty": [255, 175, 0, 0, 0, 79], "prod": [[0.0, 0.6959, 0.0, 0.0, 0.0, 0.3122], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6829, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.3011], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6964, 0.3155], [1.0015, -0.0034], [0.6904, -0.0136], [0.0075, -0.0075], [0.0041, 0.3022], [0.9768, 0.0002]], "code": [[169, 77], [244, -1], [168, -3], [2, -2], [1, 74], [238, 0]], "rowsum": [1.011, 0.9986, 0.6781, 0.0, 0.3082, 0.9781]}], "y": [-1.714, -1.1781, 0.523, 1.6772, 1.1751, -0.5102], "vn": [-0.5686, -0.3905, 0.1749, 0.5585, 0.3916, -0.1686], "change": 0.007102982492086132, "lam_x": 1.0088279349004963, "t_us": 137768.0}, {"t": "iter", "orb": 1, "it": 17, "v": [-0.5686, -0.3905, 0.1749, 0.5585, 0.3916, -0.1686], "vmax": 0.5686057714898146, "passes": [{"sign": "+", "duty": [0, 0, 78, 250, 176, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.306, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9761, 0.0, 0.0], [0.0, 0.0, 0.305, 0.0, 0.6927, 0.0], [0.0, 0.0, 0.0, 0.9914, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.689, 0.0]], "node": [[0.0, 0.0054], [0.3066, -0.0045], [0.9778, 0.0032], [0.3086, 0.6876], [0.9849, -0.0008], [-0.0161, 0.6904]], "code": [[0, 1], [75, -1], [238, 1], [75, 167], [240, 0], [-4, 168]], "rowsum": [0.0041, 0.3041, 0.9822, 0.9945, 0.9863, 0.674]}, {"sign": "-", "duty": [255, 175, 0, 0, 0, 76], "prod": [[0.0, 0.6959, 0.0, 0.0, 0.0, 0.3003], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6829, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.2897], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6909, 0.3109], [1.0229, -0.0057], [0.6921, 0.0004], [0.0002, -0.0093], [0.007, 0.2972], [0.9738, -0.0103]], "code": [[168, 76], [249, -1], [168, 0], [0, -2], [2, 72], [237, -3]], "rowsum": [1.0027, 1.0192, 0.6904, -0.0082, 0.3041, 0.9616]}], "y": [-1.7065, -1.1886, 0.5161, 1.6885, 1.172, -0.5011], "vn": [-0.5661, -0.3941, 0.1721, 0.5614, 0.3899, -0.1658], "change": 0.006819478136657469, "lam_x": 1.011072510846697, "t_us": 141820.0}, {"t": "iter", "orb": 1, "it": 18, "v": [-0.5661, -0.3941, 0.1721, 0.5614, 0.3899, -0.1658], "vmax": 0.5660712977458607, "passes": [{"sign": "+", "duty": [0, 0, 78, 253, 176, 0], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.306, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.9878, 0.0, 0.0], [0.0, 0.0, 0.305, 0.0, 0.6927, 0.0], [0.0, 0.0, 0.0, 1.0033, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.689, 0.0]], "node": [[-0.0039, 0.0022], [0.3147, -0.0016], [0.9902, 0.0053], [0.3065, 0.6861], [1.0034, -0.0107], [-0.0022, 0.6885]], "code": [[-1, 1], [77, 0], [241, 1], [75, 167], [244, -3], [-1, 168]], "rowsum": [0.0, 0.3164, 0.9945, 0.9945, 0.9904, 0.6863]}, {"sign": "-", "duty": [255, 178, 0, 0, 0, 75], "prod": [[0.0, 0.7078, 0.0, 0.0, 0.0, 0.2963], [1.0062, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.6946, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.2859], [0.9791, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.7142, 0.292], [1.0001, 0.0023], [0.6977, 0.0062], [-0.0017, -0.0031], [-0.0004, 0.2869], [0.9688, 0.002]], "code": [[174, 71], [243, 1], [170, 2], [0, -1], [0, 70], [236, 0]], "rowsum": [1.0068, 1.0027, 0.7068, -0.0041, 0.2877, 0.9699]}], "y": [-1.7035, -1.1776, 0.5074, 1.6896, 1.1785, -0.4925], "vn": [-0.5673, -0.3924, 0.1683, 0.5617, 0.3916, -0.1644], "change": 0.004891850383428865, "lam_x": 1.0053374706483265, "t_us": 145872.0}, {"t": "done", "orb": 1, "x_analog": 1.0084126387985066, "x_refined": 0.9998788466008568, "x_exact": 1.0, "iters": 19, "vec": [-0.5673, -0.3924, 0.1683, 0.5617, 0.3916, -0.1644], "t_us": 145872.0}, {"t": "iter", "orb": 2, "it": 0, "v": [0.2046, -0.1789, -0.6567, -0.1488, 0.6726, 0.1426], "vmax": 0.6725998790329576, "passes": [{"sign": "+", "duty": [78, 0, 0, 0, 255, 54], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.2134], [0.3078, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 1.0036, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.2058], [0.2995, 0.0, 0.0, 0.0, 0.9983, 0.0]], "node": [[0.0089, 0.2205], [0.2974, 0.0024], [0.0056, -0.0083], [-0.0018, 0.9969], [0.0071, 0.2025], [0.284, 0.9963]], "code": [[2, 54], [72, 1], [1, -2], [0, 243], [2, 49], [69, 242]], "rowsum": [0.2301, 0.3, -0.0041, 0.9986, 0.2096, 1.2781]}, {"sign": "-", "duty": [0, 68, 249, 56, 0, 0], "prod": [[0.0, 0.2704, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.9769, 0.0, 0.0, 0.0], [0.0, 0.2653, 0.0, 0.2186, 0.0, 0.0], [0.0, 0.0, 0.9736, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.2221, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.2731, 0.0182], [0.968, 0.0119], [0.4962, -0.0002], [0.9846, -0.0037], [0.231, -0.0045], [-0.0045, -0.0073]], "code": [[66, 4], [236, 3], [121, 0], [240, -1], [56, -1], [-1, -2]], "rowsum": [0.2877, 0.9822, 0.4973, 0.9822, 0.226, -0.0123]}], "y": [0.3704, -0.8178, -1.6515, -0.2865, 1.3341, 1.1554], "vn": [0.1442, -0.3141, -0.6364, -0.1109, 0.5141, 0.4461], "change": 0.3754919118871377, "lam_x": 0.4113851385596261, "t_us": 149924.0}, {"t": "iter", "orb": 2, "it": 1, "v": [0.1442, -0.3141, -0.6364, -0.1109, 0.5141, 0.4461], "vmax": 0.6363812993734848, "passes": [{"sign": "+", "duty": [58, 0, 0, 0, 206, 179], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.7073], [0.2289, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.8108, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.6823], [0.2227, 0.0, 0.0, 0.0, 0.8065, 0.0]], "node": [[-0.0071, 0.7074], [0.2256, 0.0002], [0.0106, -0.003], [0.0039, 0.8056], [-0.0064, 0.6821], [0.2172, 0.8029]], "code": [[-2, 172], [55, 0], [3, -1], [1, 196], [-2, 166], [53, 195]], "rowsum": [0.6986, 0.226, 0.0082, 0.8096, 0.674, 1.0192]}, {"sign": "-", "duty": [0, 126, 255, 44, 0, 0], "prod": [[0.0, 0.501, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.4917, 0.0, 0.1718, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.1745, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.4955, -0.0083], [0.9978, -0.0014], [0.6728, 0.0048], [1.0068, -0.0021], [0.1847, -0.0013], [-0.0012, 0.0043]], "code": [[121, -2], [243, 0], [164, 1], [245, -1], [45, 0], [0, 1]], "rowsum": [0.489, 0.9986, 0.6781, 1.0027, 0.1849, 0.0041]}], "y": [0.4222, -1.1211, -1.7001, -0.3451, 1.3401, 1.5398], "vn": [0.142, -0.3834, -0.5792, -0.1164, 0.4574, 0.524], "change": 0.13182927896447788, "lam_x": 0.9090196771982719, "t_us": 153976.0}, {"t": "iter", "orb": 2, "it": 2, "v": [0.142, -0.3834, -0.5792, -0.1164, 0.4574, 0.524], "vmax": 0.5792331593664866, "passes": [{"sign": "+", "duty": [63, 0, 0, 0, 201, 231], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.9128], [0.2486, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.7911, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.8805], [0.2419, 0.0, 0.0, 0.0, 0.7869, 0.0]], "node": [[0.0185, 0.9155], [0.2416, 0.005], [-0.0018, -0.0024], [0.0018, 0.7794], [0.0117, 0.8818], [0.2326, 0.7841]], "code": [[5, 223], [59, 1], [0, -1], [0, 190], [3, 215], [57, 191]], "rowsum": [0.937, 0.2466, -0.0041, 0.7808, 0.8959, 1.0192]}, {"sign": "-", "duty": [0, 169, 255, 51, 0, 0], "prod": [[0.0, 0.672, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.6595, 0.0, 0.1991, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.2023, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.6701, 0.0073], [0.997, -0.0079], [0.8555, -0.0046], [0.9998, -0.0098], [0.2049, 0.0026], [0.009, 0.0039]], "code": [[163, 2], [243, -2], [208, -1], [243, -2], [50, 1], [2, 1]], "rowsum": [0.6781, 0.9904, 0.8507, 0.9904, 0.2096, 0.0123]}], "y": [0.4344, -1.1988, -1.6548, -0.3545, 1.3133, 1.6326], "vn": [0.1421, -0.4055, -0.5571, -0.1197, 0.4396, 0.5453], "change": 0.04197046094350757, "lam_x": 0.9772858391366337, "t_us": 158028.0}, {"t": "iter", "orb": 2, "it": 3, "v": [0.1421, -0.4055, -0.5571, -0.1197, 0.4396, 0.5453], "vmax": 0.5571400614786587, "passes": [{"sign": "+", "duty": [65, 0, 0, 0, 201, 250], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 0.9878], [0.2565, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.7911, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.9529], [0.2496, 0.0, 0.0, 0.0, 0.7869, 0.0]], "node": [[-0.0155, 0.9858], [0.2547, -0.0014], [0.0123, 0.0024], [-0.0103, 0.7867], [0.0043, 0.9529], [0.2521, 0.7771]], "code": [[-4, 240], [62, 0], [3, 1], [-3, 191], [1, 232], [61, 189]], "rowsum": [0.9699, 0.2548, 0.0164, 0.7726, 0.9575, 1.0274]}, {"sign": "-", "duty": [0, 186, 255, 55, 0, 0], "prod": [[0.0, 0.7396, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0005, 0.0, 0.0, 0.0], [0.0, 0.7258, 0.0, 0.2147, 0.0, 0.0], [0.0, 0.0, 0.997, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.2181, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.7467, -0.0064], [0.9996, -0.001], [0.9548, -0.0062], [0.9879, -0.0002], [0.2173, 0.0093], [-0.0092, -0.0065]], "code": [[182, -2], [243, 0], [232, -2], [240, 0], [53, 2], [-2, -2]], "rowsum": [0.7397, 0.9986, 0.9452, 0.9863, 0.226, -0.0164]}], "y": [0.4128, -1.2265, -1.633, -0.3588, 1.2878, 1.6737], "vn": [0.1369, -0.4117, -0.5477, -0.1213, 0.4297, 0.5589], "change": 0.02091221586840758, "lam_x": 0.9876044288563088, "t_us": 162080.0}, {"t": "iter", "orb": 2, "it": 4, "v": [0.1369, -0.4117, -0.5477, -0.1213, 0.4297, 0.5589], "vmax": 0.5588793061917874, "passes": [{"sign": "+", "duty": [62, 0, 0, 0, 196, 255], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 1.0076], [0.2446, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.7714, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.972], [0.2381, 0.0, 0.0, 0.0, 0.7673, 0.0]], "node": [[0.0098, 1.0091], [0.2513, -0.0119], [0.0128, -0.0055], [0.0084, 0.7592], [-0.0056, 0.9679], [0.2335, 0.7736]], "code": [[2, 246], [61, -3], [3, -1], [2, 185], [-1, 236], [57, 188]], "rowsum": [1.0192, 0.2384, 0.0082, 0.7685, 0.9658, 1.0068]}, {"sign": "-", "duty": [0, 188, 250, 55, 0, 0], "prod": [[0.0, 0.7476, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.9809, 0.0, 0.0, 0.0], [0.0, 0.7336, 0.0, 0.2147, 0.0, 0.0], [0.0, 0.0, 0.9775, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.2181, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.7501, 0.0079], [0.9836, 0.0154], [0.944, 0.0055], [0.9776, -0.0027], [0.2179, 0.0069], [-0.0125, -0.0092]], "code": [[183, 2], [239, 4], [230, 1], [238, -1], [53, 2], [-3, -2]], "rowsum": [0.7603, 0.9986, 0.9493, 0.974, 0.226, -0.0205]}], "y": [0.4188, -1.2494, -1.6228, -0.3577, 1.2739, 1.6934], "vn": [0.1383, -0.4181, -0.5425, -0.1204, 0.4238, 0.5636], "change": 0.011334273818568769, "lam_x": 0.9978364729368159, "t_us": 166132.0}, {"t": "iter", "orb": 2, "it": 5, "v": [0.1383, -0.4181, -0.5425, -0.1204, 0.4238, 0.5636], "vmax": 0.5636006458155656, "passes": [{"sign": "+", "duty": [63, 0, 0, 0, 192, 255], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 1.0076], [0.2486, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.7557, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.972], [0.2419, 0.0, 0.0, 0.0, 0.7517, 0.0]], "node": [[0.0011, 1.0017], [0.2535, 0.0023], [-0.0016, 0.0027], [-0.0005, 0.7492], [0.0037, 0.9807], [0.2363, 0.7431]], "code": [[0, 244], [62, 1], [0, 1], [0, 182], [1, 239], [57, 181]], "rowsum": [1.0027, 0.2589, 0.0041, 0.7479, 0.9863, 0.9781]}, {"sign": "-", "duty": [0, 189, 245, 54, 0, 0], "prod": [[0.0, 0.7515, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.9612, 0.0, 0.0, 0.0], [0.0, 0.7375, 0.0, 0.2108, 0.0, 0.0], [0.0, 0.0, 0.9579, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.2142, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.7465, 0.0108], [0.9501, -0.0061], [0.9466, -0.0167], [0.9562, 0.0017], [0.2187, -0.0055], [-0.0009, 0.0018]], "code": [[182, 3], [231, -1], [230, -4], [233, 0], [53, -1], [0, 0]], "rowsum": [0.7603, 0.9452, 0.9288, 0.9575, 0.2137, 0.0]}], "y": [0.4136, -1.224, -1.6074, -0.3592, 1.2842, 1.6798], "vn": [0.136, -0.4144, -0.5433, -0.1238, 0.4286, 0.5617], "change": 0.00760152091029819, "lam_x": 0.9752400821738676, "t_us": 170184.0}, {"t": "iter", "orb": 2, "it": 6, "v": [0.136, -0.4144, -0.5433, -0.1238, 0.4286, 0.5617], "vmax": 0.5616672212539714, "passes": [{"sign": "+", "duty": [62, 0, 0, 0, 195, 255], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 1.0076], [0.2446, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.7675, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.972], [0.2381, 0.0, 0.0, 0.0, 0.7634, 0.0]], "node": [[0.0145, 1.0042], [0.243, -0.003], [0.0021, -0.0015], [0.0029, 0.7571], [-0.006, 0.9661], [0.2241, 0.7539]], "code": [[4, 244], [59, -1], [1, 0], [1, 184], [-1, 235], [55, 183]], "rowsum": [1.0192, 0.2384, 0.0041, 0.7603, 0.9616, 0.9781]}, {"sign": "-", "duty": [0, 188, 247, 56, 0, 0], "prod": [[0.0, 0.7476, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.9691, 0.0, 0.0, 0.0], [0.0, 0.7336, 0.0, 0.2186, 0.0, 0.0], [0.0, 0.0, 0.9657, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.2221, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.7448, 0.0066], [0.973, -0.0095], [0.9546, 0.0027], [0.9665, -0.0142], [0.2122, 0.0046], [0.0004, 0.0003]], "code": [[181, 2], [237, -2], [232, 1], [235, -3], [52, 1], [0, 0]], "rowsum": [0.7521, 0.9658, 0.9575, 0.9534, 0.2178, 0.0]}], "y": [0.4225, -1.2384, -1.6235, -0.3564, 1.2761, 1.6741], "vn": [0.1399, -0.4165, -0.5451, -0.1201, 0.4268, 0.5597], "change": 0.006584077888033711, "lam_x": 0.9842287174777531, "t_us": 174236.0}, {"t": "iter", "orb": 2, "it": 7, "v": [0.1399, -0.4165, -0.5451, -0.1201, 0.4268, 0.5597], "vmax": 0.5596926851130061, "passes": [{"sign": "+", "duty": [64, 0, 0, 0, 194, 255], "prod": [[0.0, 0.0, 0.0, 0.0, 0.0, 1.0076], [0.2525, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.7635, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.972], [0.2457, 0.0, 0.0, 0.0, 0.7595, 0.0]], "node": [[-0.0041, 1.0172], [0.2603, -0.0037], [0.0014, -0.0139], [0.0079, 0.7475], [0.0076, 0.9737], [0.2405, 0.7657]], "code": [[-1, 248], [63, -1], [0, -3], [2, 182], [2, 237], [59, 186]], "rowsum": [1.0151, 0.2548, -0.0123, 0.7562, 0.9822, 1.0068]}, {"sign": "-", "duty": [0, 190, 248, 55, 0, 0], "prod": [[0.0, 0.7555, 0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.973, 0.0, 0.0, 0.0], [0.0, 0.7414, 0.0, 0.2147, 0.0, 0.0], [0.0, 0.0, 0.9697, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.2181, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]], "node": [[0.7539, 0.0069], [0.9765, -0.0019], [0.954, 0.0052], [0.9731, -0.0056], [0.2201, 0.0006], [0.0085, -0.0008]], "code": [[183, 2], [238, 0], [232, 1], [237, -1], [54, 0], [2, 0]], "rowsum": [0.7603, 0.9781, 0.9575, 0.9699, 0.2219, 0.0082]}], "y": [0.4228, -1.2389, -1.6343, -0.3601, 1.2802, 1.6797], "vn": [0.1392, -0.4152, -0.5461, -0.12, 0.4273, 0.5595], "change": 0.0019072938941029547, "lam_x": 0.995749803834538, "t_us": 178288.0}, {"t": "done", "orb": 2, "x_analog": 0.9850728678287196, "x_refined": 1.000296876073143, "x_exact": 0.9999999999999996, "iters": 8, "vec": [0.1392, -0.4152, -0.5461, -0.12, 0.4273, 0.5595], "t_us": 178288.0}], "result": {"orbitals": [{"k": 0, "x_exact": 2.0000000000000004, "x_analog": 1.9970453203514176, "x_refined": 1.9996430609191682, "iters": 17}, {"k": 1, "x_exact": 1.0, "x_analog": 1.0084126387985066, "x_refined": 0.9998788466008568, "iters": 19}, {"k": 2, "x_exact": 0.9999999999999996, "x_analog": 0.9850728678287196, "x_refined": 1.000296876073143, "iters": 8}], "E_exact": 8.0, "E_analog": 7.981061653957288, "E_refined": 7.999637567186336}};
+const T=TRACE, M=T.meta, n=M.n, nt=M.nt, tile=M.tile, EV=T.events;
+const NS="http://www.w3.org/2000/svg";
+const LIGHT=(localStorage.getItem("theme")||(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark"))==="light";
+document.body.className=LIGHT?"light":"dark";
+const [GREEN,RED,BLUE,ORG,PUR,IDLE,TXT,BOX,HI,GRID,F_BLUE,F_GRN,F_ORG,F_PUR,ZN,ZB]=LIGHT
+ ?["#12994f","#d62f4b","#1f6fd6","#d9820b","#7b3fc4","#8a94a3","#3b4452","#ffffff","#111827","#aab3c0","#dbeafe","#d5f2e1","#fde8c8","#eadcfa","#f3f6fa","#d5dce6"]
+ :["#3fe08a","#ff6b81","#4fa3ff","#ffb454","#c792ea","#3b4658","#aab4c3","#10151d","#ffffff","#4a5568","#1c3a5e","#143524","#3a2a10","#2a1f45","#131a24","#2a313c"];
+const svg=document.getElementById("arch");
+function S(e,o){for(const k in o)e.setAttribute(k,o[k]);return e;}
+function el(tag,o,parent){const e=document.createElementNS(NS,tag);S(e,o);(parent||svg).appendChild(e);return e;}
+function txt(x,y,s,o,parent){const e=el("text",Object.assign({x:x,y:y,fill:TXT,"font-size":10,"text-anchor":"middle"},o||{}),parent);e.textContent=s;return e;}
+const HALO=c=>({stroke:c,"stroke-width":4,"paint-order":"stroke"});
+document.getElementById("title").textContent="Hückel "+M.name+" on hybrid analog MAC";
+
+// ---------- geometry ----------
+const X0=120,CS=34,GAP=28,Y0=196,RS=32,VY=30,PY=76;
+const WY=PY+38,WH=10;                       // PWM mini-waveform baseline / height
+const colX=j=>X0+j*CS+Math.floor(j/tile)*GAP+CS/2;
+const rowY=r=>Y0+r*RS;
+const nodeX=t=>colX(Math.min((t+1)*tile,n)-1)+CS/2+GAP/2;
+const accX=nodeX(nt-1)+50, BX=accX+76, FX=accX+104, CY=rowY(n-1)+66;
+svg.setAttribute("width",FX+34); svg.setAttribute("height",CY+54);
+
+const defs=el("defs",{});
+const flt=el("filter",{id:"sh",x:"-10%",y:"-20%",width:"120%",height:"160%"},defs);
+el("feDropShadow",{dx:0,dy:1.5,stdDeviation:1.6,"flood-color":"#000","flood-opacity":LIGHT?0.16:0.5},flt);
+const SH="url(#sh)";
+
+// zones (drawn first = behind everything)
+const zbB=rowY(n-1)+24;
+el("rect",{x:6,y:4,width:colX(n-1)+CS/2+10-6,height:132,rx:8,fill:ZN,stroke:ZB});
+el("rect",{x:6,y:142,width:nodeX(nt-1)+22-6,height:zbB-142,rx:8,fill:ZN,stroke:ZB});
+el("rect",{x:accX-10,y:142,width:84,height:zbB-142,rx:8,fill:ZN,stroke:ZB});
+
+txt(14,16,"DIGITAL INPUT",{"text-anchor":"start","font-size":8,"font-weight":700,"letter-spacing":1});
+txt(14,VY+4,"ACTIVATION VECTOR",{"text-anchor":"start","font-size":9});
+txt(14,PY+15,"PWM TIMERS",{"text-anchor":"start","font-size":9});
+txt(14,158,"ANALOG CORE",{"text-anchor":"start","font-size":8,"font-weight":700,"letter-spacing":1});
+txt(14,Y0-14,"WEIGHT INPUTS",{"text-anchor":"start","font-size":9});
+txt(accX+32,158,"READOUT",{"font-size":8,"font-weight":700,"letter-spacing":1});
+txt(accX+32,Y0-14,"OUTPUTS y",{"font-size":9});
+
+const vl=[],cl=[],vb=[],vt=[],dt=[],pb=[],wv=[];
+const flatW=j=>"M"+(colX(j)-11)+","+WY+"L"+(colX(j)+11)+","+WY;
+function wave(x0,yb,h,d){
+ let s="M"+x0+","+yb;
+ for(let k=0;k<2;k++){
+  const px=x0+11*k;
+  if(d<=0.004) s+="L"+(px+11)+","+yb;
+  else if(d>=0.996) s+="L"+px+","+(yb-h)+"L"+(px+11)+","+(yb-h);
+  else{const hi=11*d;s+="L"+px+","+(yb-h)+"L"+(px+hi)+","+(yb-h)+"L"+(px+hi)+","+yb+"L"+(px+11)+","+yb;}
+ }
+ return s;
+}
+for(let j=0;j<n;j++){
+ vl[j]=el("line",{x1:colX(j),y1:VY+14,x2:colX(j),y2:PY,stroke:IDLE,"stroke-width":1});
+ el("line",{x1:colX(j),y1:PY+22,x2:colX(j),y2:PY+28,stroke:IDLE,"stroke-width":1});
+ cl[j]=el("line",{x1:colX(j),y1:PY+56,x2:colX(j),y2:rowY(n-1)+12,stroke:IDLE,"stroke-width":1});
+}
+const rw=[],aw=[],ce=[],lev=[],nd=[],ndt=[],wsr=[],wl=[],ar=[],at=[],sb=[];
+for(let r=0;r<n;r++){
+ rw[r]=[];aw[r]=[];ce[r]=[];lev[r]=[];nd[r]=[];ndt[r]=[];
+ wl[r]=el("line",{x1:96,y1:rowY(r),x2:colX(0)-CS/2,y2:rowY(r),stroke:IDLE,"stroke-width":1});
+ for(let t=0;t<nt;t++){
+  rw[r][t]=el("line",{x1:colX(t*tile)-CS/2,y1:rowY(r),x2:nodeX(t),y2:rowY(r),stroke:IDLE,"stroke-width":1});
+  aw[r][t]=el("path",{d:"M"+nodeX(t)+","+(rowY(r)+8)+"V"+(rowY(r)+10+2*t)+"H"+accX,fill:"none",stroke:IDLE,"stroke-width":1});
+ }
+ sb[r]=el("line",{x1:accX+64,y1:rowY(r),x2:BX,y2:rowY(r),stroke:IDLE,"stroke-width":1});
+}
+const bus=el("path",{d:"M"+BX+","+rowY(0)+"V"+CY+"H"+(accX+64),fill:"none",stroke:IDLE,"stroke-width":1});
+const fb=el("path",{d:"M"+(accX+64)+","+(CY+10)+"H"+FX+"V"+VY+"H"+(colX(n-1)+15),fill:"none",stroke:IDLE,"stroke-width":1});
+const FLOWEL=[].concat(vl,cl,wl,sb,[bus,fb]);
+for(let r=0;r<n;r++){FLOWEL.push(...rw[r]);FLOWEL.push(...aw[r]);}
+txt(0,0,"y⁺ − y⁻",{transform:"translate("+(BX+12)+","+((rowY(0)+CY)/2)+") rotate(-90)","font-size":9});
+txt(0,0,"feedback: next v",{transform:"translate("+(FX+14)+","+((VY+CY)/2)+") rotate(-90)","font-size":9});
+
+for(let j=0;j<n;j++){
+ txt(colX(j),VY-17,"C"+j,{"font-size":8});
+ vb[j]=el("rect",{x:colX(j)-15,y:VY-12,width:30,height:26,rx:4,fill:BOX,stroke:IDLE,filter:SH});
+ vt[j]=txt(colX(j),VY+4,"",{fill:HI,"font-size":9});
+ wv[j]=el("path",{d:flatW(j),fill:"none",stroke:IDLE,"stroke-width":1.6,"stroke-linejoin":"round"});
+ dt[j]=txt(colX(j),PY+51,"",{"font-size":8});
+}
+for(let t=0;t<nt;t++){
+ const f=t*tile,l=Math.min((t+1)*tile,n)-1;
+ pb[t]=el("rect",{x:colX(f)-15,y:PY,width:colX(l)-colX(f)+30,height:22,rx:4,fill:BOX,stroke:IDLE,filter:SH});
+ txt((colX(f)+colX(l))/2,PY+15,"PWM tile "+t);
+}
+const LV_OPEN="M-5,4L4,-4",LV_CLOSED="M-5,0L5,0";
+for(let r=0;r<n;r++){
+ for(let j=0;j<n;j++){
+  el("circle",{cx:colX(j),cy:rowY(r),r:8,fill:ZN});
+  const g=el("g",{transform:"translate("+colX(j)+","+rowY(r)+")","fill-opacity":0.02,stroke:IDLE,"stroke-width":1});
+  el("circle",{r:8,fill:BLUE},g);
+  lev[r][j]=el("path",{d:LV_OPEN,fill:"none","stroke-width":1.8,"stroke-linecap":"round"},g);
+  ce[r][j]=g;
+ }
+ for(let t=0;t<nt;t++){
+  nd[r][t]=el("rect",{x:nodeX(t)-13,y:rowY(r)-8,width:26,height:16,rx:4,fill:BOX,stroke:IDLE,filter:SH});
+  ndt[r][t]=txt(nodeX(t),rowY(r)+3.5,"Σ",{"font-size":9,fill:HI});
+ }
+ wsr[r]=el("rect",{x:14,y:rowY(r)-9,width:82,height:18,rx:4,fill:BOX,stroke:IDLE,filter:SH});
+ txt(55,rowY(r)+4,"WSR row "+r);
+ ar[r]=el("rect",{x:accX,y:rowY(r)-10,width:64,height:20,rx:4,fill:BOX,stroke:IDLE,filter:SH});
+ at[r]=txt(accX+32,rowY(r)+4,"",{fill:HI});
+}
+const ctrlW=accX+64-X0;
+const ctrl=el("rect",{x:X0,y:CY-24,width:ctrlW,height:60,rx:6,fill:BOX,stroke:IDLE,"stroke-width":1.5,filter:SH});
+txt(X0+ctrlW/2,CY-8,"DIGITAL CONTROLLER",{fill:HI,"font-size":11,"font-weight":700});
+txt(X0+ctrlW/2,CY+6,"combine (+/−) · Gram-Schmidt · normalise · converged?",{"font-size":9});
+const ctrlT2=txt(X0+ctrlW/2,CY+24,"",{fill:PUR,"font-size":11});
+
+// ---------- molecule panel ----------
+const msvg=document.getElementById("mol");
+const xs=M.coords.map(c=>c[0]),ys=M.coords.map(c=>c[1]);
+const minx=Math.min(...xs),maxx=Math.max(...xs),miny=Math.min(...ys),maxy=Math.max(...ys);
+function layout(cx,cy,hw,hh,rmax){
+ const sc=Math.min(hw/Math.max((maxx-minx)/2,0.01),hh/Math.max((maxy-miny)/2,0.01),rmax);
+ return i=>[cx+(M.coords[i][0]-(minx+maxx)/2)*sc, cy-(M.coords[i][1]-(miny+maxy)/2)*sc];
+}
+const MW=330,MH=300,pos=layout(MW/2,165,84,72,80);
+txt(MW/2,15,"molecule: π orbital on each carbon",{"font-size":11},msvg);
+const mcap=txt(MW/2,32,"",{fill:HI,"font-size":11},msvg);
+const mcap2=txt(MW/2,47,"",{"font-size":10},msvg);
+txt(MW/2,MH-8,"green bond = in phase · red dashed = out of phase",{"font-size":9},msvg);
+const bonds=M.edges.map(e=>{const a=pos(e[0]),b=pos(e[1]);return el("line",{x1:a[0],y1:a[1],x2:b[0],y2:b[1],stroke:GRID,"stroke-width":2},msvg);});
+const atoms=[],avals=[];
+M.coords.forEach((c,i)=>{
+ const p=pos(i),dx=p[0]-MW/2,dy=p[1]-165,d=Math.hypot(dx,dy)||1;
+ const side=Math.abs(dx)/d>0.6;
+ const anc=side?(dx>0?"start":"end"):"middle";
+ const tx=side?p[0]+(dx>0?26:-26):p[0], ty=side?p[1]+3:(dy<0?p[1]-28:p[1]+34);
+ atoms[i]=el("circle",{cx:p[0],cy:p[1],r:7,fill:"none",stroke:IDLE,"stroke-width":1.5},msvg);
+ avals[i]=txt(tx,ty,"",{"text-anchor":anc,"font-size":10,fill:HI,stroke:BOX,"stroke-width":3,"paint-order":"stroke"},msvg);
+});
+function updateMol(vec,orb,fin){
+ const mx=vec?Math.max(...vec.map(Math.abs))||1:1;
+ atoms.forEach((a,i)=>{
+  if(!vec){S(a,{r:7,fill:"none"});avals[i].textContent="C"+i;return;}
+  S(a,{r:5+17*Math.abs(vec[i])/mx,fill:vec[i]>=0?BLUE:RED,"fill-opacity":0.85});
+  avals[i].textContent="C"+i+"  "+(vec[i]>=0?"+":"−")+Math.abs(vec[i]).toFixed(2);
+ });
+ M.edges.forEach((e,k)=>{
+  const same=vec&&vec[e[0]]*vec[e[1]]>=0;
+  S(bonds[k],vec?{stroke:same?GREEN:RED,"stroke-width":same?3:2,"stroke-dasharray":same?"none":"4 3"}:{stroke:GRID,"stroke-width":2,"stroke-dasharray":"none"});
+ });
+ const R=orb>=0?T.result.orbitals[orb]:null;
+ if(!vec||!R){mcap.textContent="no orbital yet";mcap2.textContent="";return;}
+ const x=R.x_exact,kind=x>0.05?"bonding":x<-0.05?"antibonding":"non-bonding";
+ const flips=M.edges.filter(e=>vec[e[0]]*vec[e[1]]<0).length;
+ mcap.textContent="orbital "+orb+" · x = "+x.toFixed(2)+" ("+kind+") · "+(fin?"final":"estimate");
+ mcap2.textContent=flips+" of "+M.edges.length+" bonds out of phase";
+}
+
+// finished-orbital thumbnails
+const nocc=T.result.orbitals.length,GCOLS=3,GW=110,GH=104;
+const gsvg=document.getElementById("gallery");
+gsvg.setAttribute("width",GCOLS*GW);gsvg.setAttribute("height",24+Math.ceil(nocc/GCOLS)*GH);
+const gp=layout(GW/2,44,40,28,34);
+function drawGallery(done){
+ while(gsvg.firstChild) gsvg.removeChild(gsvg.firstChild);
+ txt(GCOLS*GW/2,14,"finished orbitals (each holds ↑↓)",{},gsvg);
+ done.forEach(d=>{
+  const k=d.orb,ox=(k%GCOLS)*GW,oy=24+Math.floor(k/GCOLS)*GH,v=d.vec,mx=Math.max(...v.map(Math.abs))||1;
+  M.edges.forEach(e=>{const a=gp(e[0]),b=gp(e[1]);el("line",{x1:ox+a[0],y1:oy+a[1],x2:ox+b[0],y2:oy+b[1],stroke:GRID,"stroke-width":1},gsvg);});
+  v.forEach((c,i)=>{const p=gp(i);el("circle",{cx:ox+p[0],cy:oy+p[1],r:2+6*Math.abs(c)/mx,fill:c>=0?BLUE:RED,"fill-opacity":0.85},gsvg);});
+  txt(ox+GW/2,oy+GH-12,"#"+k+" · x = "+d.x_analog.toFixed(3),{fill:GREEN},gsvg);
+ });
+}
+
+// ---------- level + convergence plots ----------
+const dupIdx=M.exact.map((x,i)=>M.exact.slice(0,i).filter(y=>Math.abs(y-x)<1e-6).length);
+function drawLevels(done){
+ const c=document.getElementById("levels"),g=c.getContext("2d"),W=c.width,H=c.height;
+ g.clearRect(0,0,W,H);g.fillStyle=TXT;g.font="11px Segoe UI";
+ g.fillText("π levels: E−α in units of |β| (dashed = exact)",8,14);
+ const ex=M.exact.map(x=>-x),lo=Math.min(...ex)-0.4,hi=Math.max(...ex)+0.4;
+ const Y=e=>H-12-(e-lo)/(hi-lo)*(H-40);
+ ex.forEach((e,i)=>{
+  const x0=40+dupIdx[i]*60;
+  g.strokeStyle=GRID;g.setLineDash([4,3]);g.beginPath();g.moveTo(x0,Y(e));g.lineTo(x0+50,Y(e));g.stroke();g.setLineDash([]);
+  if(dupIdx[i]===0){g.fillStyle=TXT;g.fillText(e.toFixed(3),4,Y(e)+4);}
+ });
+ done.forEach(d=>{
+  const e=-d.x_analog,x0=40+dupIdx[d.orb]*60;
+  g.strokeStyle=GREEN;g.lineWidth=3;g.beginPath();g.moveTo(x0,Y(e));g.lineTo(x0+50,Y(e));g.stroke();g.lineWidth=1;
+  g.fillStyle=HI;g.fillText("↑↓",x0+17,Y(e)-5);
+  g.fillStyle=GREEN;g.fillText("x="+d.x_analog.toFixed(3),x0,Y(e)+14);
+ });
+}
+function drawConv(pts){
+ const c=document.getElementById("conv"),g=c.getContext("2d"),W=c.width,H=c.height;
+ g.clearRect(0,0,W,H);g.fillStyle=TXT;g.font="11px Segoe UI";
+ g.fillText("convergence: log10(Δ vector) per iteration",8,14);
+ const lo=-3,hi=0.5,Y=v=>H-14-(Math.log10(Math.max(v,1e-6))-lo)/(hi-lo)*(H-36);
+ g.strokeStyle=GRID;g.setLineDash([4,3]);g.beginPath();g.moveTo(8,Y(M.cfg.tol));g.lineTo(W-8,Y(M.cfg.tol));g.stroke();g.setLineDash([]);
+ g.fillText("tol",W-30,Y(M.cfg.tol)-3);
+ const xm=Math.max(20,pts.length);
+ g.strokeStyle=ORG;g.beginPath();
+ pts.forEach((p,i)=>{const x=8+i/(xm-1)*(W-16),y=Y(p);if(i)g.lineTo(x,y);else g.moveTo(x,y);});g.stroke();
+}
+
+// ---------- stage strip ----------
+const STAGES=["1 Load weights","2 Split v⁺ / v⁻","3 PWM duty","4 Multiply","5 Sum & settle","6 ADC","7 Accumulate","8 Controller"];
+const pipe=document.getElementById("pipe");
+const chips=STAGES.map(s=>{const c=document.createElement("span");c.className="chip";c.textContent=s;pipe.appendChild(c);return c;});
+function setStage(k,col){chips.forEach((c,i)=>{const on=i===k;c.style.borderColor=on?col:"";c.style.background=on?col+"26":"";c.style.color=on?col:"";c.style.fontWeight=on?"600":"";});}
+function fl(e){e.setAttribute("class","flow");}
+
+// ---------- timeline ----------
+const steps=[];
+EV.forEach((e,i)=>{ if(e.t==="iter") for(let s=0;s<12;s++) steps.push({i:i,s:s}); else steps.push({i:i,s:0}); });
+const LOGL=EV.map(e=>{
+ if(e.t==="load") return "load row "+e.row+"  words "+e.words.join(" ")+"  ("+e.cycles+" clocks)";
+ if(e.t==="iter") return "orbital "+e.orb+" iter "+e.it+":  Δ="+e.change.toFixed(4)+"  x≈"+e.lam_x.toFixed(4)+"  hw time "+(e.t_us/1000).toFixed(1)+" ms";
+ return "ORBITAL "+e.orb+" DONE  analog x="+e.x_analog.toFixed(4)+"  refined="+e.x_refined.toFixed(4)+"  exact="+e.x_exact.toFixed(4)+"  ("+e.iters+" iters)";
+});
+function stageDesc(ev,s){
+ if(s===0) return "DIGITAL — vector register splits v into v⁺ and v⁻ (PWM duty cannot be negative)";
+ if(s===11) return "DIGITAL — y = y⁺ − y⁻, Gram-Schmidt against found orbitals, normalise, check convergence";
+ const P=ev.passes[Math.floor((s-1)/5)],g=P.sign==="+"?"v⁺":"v⁻",sub=(s-1)%5;
+ return ["PWM TIMERS — duty codes for "+g+" (255-clock period)",
+  "ANALOG — each cell's switch gates its DAC voltage: product = weight × duty (line width ∝ product)",
+  "ANALOG — products add at each 4-input summing node and settle (RC average)",
+  "ADC — each tile node is digitised (number = ADC code)",
+  "DIGITAL — tile codes accumulate into row sums ("+g+" pass)"][sub];
+}
+
+function render(k){
+ const st=steps[k],ev=EV[st.i];
+ FLOWEL.forEach(e=>e.removeAttribute("class"));
+ vl.forEach(e=>S(e,{stroke:IDLE,"stroke-width":1}));cl.forEach(e=>S(e,{stroke:IDLE,"stroke-width":1}));
+ vb.forEach(e=>S(e,{stroke:IDLE}));vt.forEach(e=>e.textContent="");dt.forEach(e=>e.textContent="");
+ wv.forEach((e,j)=>S(e,{d:flatW(j),stroke:IDLE}));
+ pb.forEach(e=>S(e,{stroke:IDLE,fill:BOX}));
+ let loaded=-1;for(let i=0;i<=st.i;i++) if(EV[i].t==="load") loaded=EV[i].row;
+ for(let r=0;r<n;r++){
+  S(wsr[r],{stroke:IDLE,fill:BOX});S(wl[r],{stroke:IDLE,"stroke-width":1});
+  S(ar[r],{stroke:IDLE,fill:BOX});at[r].textContent="";S(sb[r],{stroke:IDLE,"stroke-width":1});
+  for(let j=0;j<n;j++){S(ce[r][j],{"fill-opacity":r<=loaded?0.06+0.55*M.wcode[r][j]/M.wl:0.02,stroke:IDLE,"stroke-width":1});lev[r][j].setAttribute("d",LV_OPEN);}
+  for(let t=0;t<nt;t++){S(rw[r][t],{stroke:IDLE,"stroke-width":1});S(aw[r][t],{stroke:IDLE,"stroke-width":1});S(nd[r][t],{stroke:IDLE,fill:BOX});ndt[r][t].textContent="Σ";}
+ }
+ S(bus,{stroke:IDLE,"stroke-width":1});S(fb,{stroke:IDLE,"stroke-width":1});S(ctrl,{stroke:IDLE,fill:BOX});ctrlT2.textContent="";
+
+ let vec=null,desc="",hw=0,orb=-1,stg=-1,scol=BLUE;
+ if(ev.t==="load"){
+  const r=ev.row;stg=0;
+  S(wsr[r],{stroke:BLUE,fill:F_BLUE});S(wl[r],{stroke:BLUE,"stroke-width":3});fl(wl[r]);
+  for(let j=0;j<n;j++) S(ce[r][j],{stroke:BLUE,"stroke-width":2});
+  desc="WEIGHT LOAD — row "+r+": one 32-bit shift register per tile clocks in "+ev.words.join(" , ")+" ({w4,w3,w2,w1}, as in mac_ctrl.v)";
+ } else if(ev.t==="done"){
+  vec=ev.vec;orb=ev.orb;hw=ev.t_us;stg=7;scol=PUR;
+  desc="ORBITAL "+ev.orb+" converged after "+ev.iters+" iterations: analog x = "+ev.x_analog.toFixed(4)+", refined = "+ev.x_refined.toFixed(4)+", exact = "+ev.x_exact.toFixed(4);
+ } else {
+  orb=ev.orb;hw=ev.t_us;const s=st.s;vec=ev.v;desc=stageDesc(ev,s);
+  if(s===0){
+   stg=1;
+   for(let j=0;j<n;j++){S(vl[j],{stroke:BLUE,"stroke-width":1+2.5*Math.abs(ev.v[j])/ev.vmax});fl(vl[j]);S(vb[j],{stroke:BLUE});}
+  } else if(s<=10){
+   const pi=Math.floor((s-1)/5),sub=(s-1)%5,P=ev.passes[pi],col=P.sign==="+"?GREEN:RED;
+   stg=sub+2;scol=sub===0?BLUE:(sub<=2?col:(sub===3?ORG:BLUE));
+   if(sub<=2) for(let j=0;j<n;j++){
+    S(cl[j],{stroke:col,"stroke-width":1+2.5*P.duty[j]/M.dmax});
+    if(P.duty[j]>0) fl(cl[j]);
+    S(wv[j],{d:wave(colX(j)-11,WY,WH,P.duty[j]/(M.dmax||255)),stroke:col});
+    dt[j].textContent=P.duty[j];
+   }
+   if(sub===0) pb.forEach(e=>S(e,{stroke:BLUE,fill:F_BLUE}));
+   if(sub===1||sub===2) for(let r=0;r<n;r++)for(let j=0;j<n;j++){
+    const p=P.prod[r][j]; if(p>0.002){S(ce[r][j],{stroke:col,"stroke-width":1.2+1.2*Math.min(1,p)});lev[r][j].setAttribute("d",LV_CLOSED);}
+   }
+   if(sub===2) for(let r=0;r<n;r++)for(let t=0;t<nt;t++){
+    const a=Math.abs(P.node[r][t]);
+    S(rw[r][t],{stroke:col,"stroke-width":1+2*Math.min(1,a/M.fs)});fl(rw[r][t]);
+    S(nd[r][t],{stroke:col,fill:F_GRN});ndt[r][t].textContent=P.node[r][t].toFixed(2);
+   }
+   if(sub>=3) for(let r=0;r<n;r++)for(let t=0;t<nt;t++){
+    const a=Math.abs(P.code[r][t])/M.top;
+    S(nd[r][t],{stroke:ORG,fill:F_ORG});ndt[r][t].textContent=P.code[r][t];
+    S(aw[r][t],{stroke:ORG,"stroke-width":1+2*Math.min(1,a)});fl(aw[r][t]);
+   }
+   if(sub===4) for(let r=0;r<n;r++){S(ar[r],{stroke:BLUE,fill:F_BLUE});at[r].textContent=P.rowsum[r].toFixed(3);}
+  } else {
+   vec=ev.vn;stg=7;scol=PUR;
+   S(ctrl,{stroke:PUR,fill:F_PUR});S(bus,{stroke:PUR,"stroke-width":2});S(fb,{stroke:PUR,"stroke-width":2});fl(bus);fl(fb);
+   for(let r=0;r<n;r++){S(ar[r],{stroke:PUR,fill:F_PUR});at[r].textContent=ev.y[r].toFixed(3);S(sb[r],{stroke:PUR,"stroke-width":1+3*Math.abs(ev.y[r])/(M.wscale*2)});fl(sb[r]);}
+   for(let j=0;j<n;j++) S(vb[j],{stroke:PUR});
+   ctrlT2.textContent="Δ = "+ev.change.toFixed(4)+"     x ≈ "+ev.lam_x.toFixed(3);
+  }
+ }
+ setStage(stg,scol);
+ if(vec) for(let j=0;j<n;j++) vt[j].textContent=vec[j].toFixed(2);
+ updateMol(vec,orb,ev.t==="done");
+
+ const done=[];for(let i=0;i<=st.i;i++) if(EV[i].t==="done") done.push(EV[i]);
+ drawLevels(done);drawGallery(done);
+ const pts=[];for(let i=0;i<=st.i;i++) if(EV[i].t==="iter"&&EV[i].orb===orb) pts.push(EV[i].change);
+ drawConv(pts);
+
+ document.getElementById("status").innerHTML="<b>"+(orb>=0?"orbital "+orb:"initialisation")+(ev.t==="iter"?" · iteration "+ev.it:"")+"</b> · estimated analog hardware time "+(hw/1000).toFixed(1)+" ms<br>"+desc;
+ const lines=[];
+ for(let i=0;i<=st.i;i++){const comp=(i<st.i)||(EV[i].t!=="iter")||st.s===11;if(comp) lines.push(LOGL[i]);}
+ const lg=document.getElementById("log");lg.textContent=lines.slice(-14).join("\n");lg.scrollTop=lg.scrollHeight;
+ document.getElementById("scrub").value=k;
+}
+
+// ---------- result table ----------
+(function(){
+ const R=T.result;let h="<tr><th>orbital</th><th>exact x</th><th>analog x</th><th>analog err</th><th>refined x</th><th>refined err</th><th>iters</th></tr>";
+ R.orbitals.forEach(o=>{h+="<tr><td>"+o.k+"</td><td>"+o.x_exact.toFixed(4)+"</td><td>"+o.x_analog.toFixed(4)+"</td><td>"+(o.x_analog-o.x_exact).toExponential(1)+"</td><td>"+o.x_refined.toFixed(4)+"</td><td>"+(o.x_refined-o.x_exact).toExponential(1)+"</td><td>"+o.iters+"</td></tr>";});
+ h+="<tr><td>total π E (β units)</td><td>"+R.E_exact.toFixed(4)+"</td><td>"+R.E_analog.toFixed(4)+"</td><td>"+(R.E_analog-R.E_exact).toExponential(1)+"</td><td>"+R.E_refined.toFixed(4)+"</td><td>"+(R.E_refined-R.E_exact).toExponential(1)+"</td><td></td></tr>";
+ document.getElementById("result").innerHTML=h;
+})();
+
+// ---------- playback ----------
+let idx=0,playing=false,timer=null;
+const btn=document.getElementById("play"),modeSel=document.getElementById("mode"),speed=document.getElementById("speed"),scrub=document.getElementById("scrub");
+scrub.max=steps.length-1;
+function advance(){
+ if(idx>=steps.length-1) return false;
+ idx++;
+ if(modeSel.value==="iter") while(idx<steps.length-1&&EV[steps[idx].i].t==="iter"&&steps[idx].s!==11) idx++;
+ return true;
+}
+function pause(){playing=false;clearTimeout(timer);btn.textContent="▶ Play";}
+function loop(){if(!playing)return;if(!advance()){pause();return;}render(idx);timer=setTimeout(loop,+speed.value);}
+function toggle(){if(playing){pause();return;}if(idx>=steps.length-1)idx=0;playing=true;btn.textContent="⏸ Pause";render(idx);timer=setTimeout(loop,+speed.value);}
+btn.onclick=toggle;
+document.getElementById("fwd").onclick=()=>{pause();if(advance())render(idx);};
+document.getElementById("back").onclick=()=>{pause();if(idx>0)idx--;render(idx);};
+document.getElementById("nextorb").onclick=()=>{pause();for(let i=idx+1;i<steps.length;i++){if(EV[steps[i].i].t==="done"){idx=i;break;}}render(idx);};
+speed.oninput=()=>{document.getElementById("spv").textContent=speed.value;};
+scrub.oninput=()=>{pause();idx=+scrub.value;render(idx);};
+document.addEventListener("keydown",e=>{if(e.code==="Space"){e.preventDefault();toggle();}});
+
+// ---------- theme, tabs, legend, summary ----------
+document.getElementById("legend").innerHTML=[[BLUE,"digital / weight load"],[GREEN,"analog, v⁺ pass"],[RED,"analog, v⁻ pass"],[ORG,"ADC"],[PUR,"controller"]]
+ .map(a=>'<span style="color:'+a[0]+'">■ '+a[1]+'</span>').join(" &nbsp; ")+" &nbsp; line width = signal size · moving dashes = signal flowing<br>cell = switch × DAC code · Σ = tile summing node (RC filter) → ADC";
+const themeBtn=document.getElementById("theme");
+themeBtn.textContent=LIGHT?"🌙 Dark":"☀ Light";
+themeBtn.onclick=()=>{localStorage.setItem("theme",LIGHT?"dark":"light");location.reload();};
+const simv=document.getElementById("simview"),gd=document.getElementById("guide"),ctl=document.getElementById("ctl"),
+ tS=document.getElementById("tabsim"),tG=document.getElementById("tabguide");
+const pv=document.getElementById("proto"),tP=document.getElementById("tabproto");
+function tab(v){pause();simv.style.display=v===0?"":"none";gd.style.display=v===1?"block":"none";pv.style.display=v===2?"block":"none";ctl.style.display=v===0?"contents":"none";tS.className=v===0?"on":"";tG.className=v===1?"on":"";tP.className=v===2?"on":"";}
+tS.onclick=()=>tab(0);tG.onclick=()=>tab(1);tP.onclick=()=>tab(2);
+(function(){
+ const R=T.result,C=M.cfg||{},f=(x,d)=>(x==null||isNaN(x))?"–":(+x).toFixed(d);
+ const its=R.orbitals.reduce((s,o)=>s+o.iters,0),last=EV[EV.length-1];
+ const eA=R.E_analog-R.E_exact,eR=R.E_refined-R.E_exact;
+ const cards=[
+  ["Exact π energy",f(R.E_exact,4)+" β","eigenvalues of A computed on the PC, for comparison only"],
+  ["Analog energy",f(R.E_analog,4)+" β","error "+f(eA,4)+" β ("+f(100*Math.abs(eA)/R.E_exact,2)+" %), read from the analog passes"],
+  ["Refined energy",f(R.E_refined,4)+" β","error "+f(eR,4)+" β: same vectors, energy recomputed digitally"],
+  ["Estimated hardware time",f((last.t_us||0)/1000,1)+" ms",its+" iterations, each = 2 analog passes (v⁺, v⁻) × "+(C.matvec_reads||1)+" read(s); includes calibration if enabled"],
+  ["Chip model","seed "+C.seed,"gain σ "+f(100*C.gain_sigma,1)+" %, offset σ "+C.offset_sigma+", noise σ "+C.noise_sigma+", ADC "+C.adc_bits+" bit, calibration: "+C.calibrate]
+ ];
+ document.getElementById("sumcards").innerHTML=cards.map(c=>'<div class="card"><b>'+c[0]+'</b><span class="big">'+c[1]+'</span><br><span class="mut">'+c[2]+'</span></div>').join("");
+ document.getElementById("sumnote").textContent=(M.name==="benzene"&&C.calibrate==="none")
+  ?"One run is one randomly drawn chip, so its error is a single draw, not the typical error. For benzene without calibration the energy error varies by about ±0.04 β between chips (measured over 40 chips)."
+  :"One run is one randomly drawn chip, so its error is a single draw, not the typical error. Run many seeds to get the spread for this molecule and these settings.";
+})();
+// ---------- prototype diagram ----------
+(function(){
+ const P=document.getElementById("psvg");
+ const E=(t,o)=>el(t,o,P);
+ const T2=(x,y,s,o)=>txt(x,y,s,o,P);
+ const box=(x,y,w,h,title,sub,col,fill)=>{E("rect",{x:x,y:y,width:w,height:h,rx:6,fill:fill||BOX,stroke:col,"stroke-width":1.5});
+  T2(x+w/2,y+16,title,{fill:HI,"font-size":11,"font-weight":700});
+  (sub||[]).forEach((s,i)=>T2(x+w/2,y+32+i*13,s,{"font-size":9}));};
+ const arrow=(d,col,lab,lx,ly)=>{E("path",{d:d,fill:"none",stroke:col,"stroke-width":1.6,"marker-end":"url(#pa)"});if(lab)T2(lx,ly,lab,{"font-size":9});};
+ const df=E("defs",{});const mk=el("marker",{id:"pa",viewBox:"0 0 10 10",refX:9,refY:5,markerWidth:7,markerHeight:7,orient:"auto-start-reverse"},df);
+ el("path",{d:"M0,0L10,5L0,10z",fill:TXT},mk);
+
+ // zones
+ E("rect",{x:8,y:8,width:150,height:384,rx:8,fill:ZN,stroke:ZB});T2(83,24,"HOST PC",{"font-size":8,"font-weight":700,"letter-spacing":1});
+ E("rect",{x:190,y:8,width:430,height:384,rx:8,fill:ZN,stroke:ZB});T2(405,24,"FPGA BOARD (Basys 3, Artix-7)",{"font-size":8,"font-weight":700,"letter-spacing":1});
+ E("rect",{x:650,y:8,width:342,height:384,rx:8,fill:ZN,stroke:ZB});T2(821,24,"ANALOG BOARD (one 4-input tile)",{"font-size":8,"font-weight":700,"letter-spacing":1});
+
+ // host
+ box(22,50,122,110,"Python controller",["mol_engine.py logic:","split v⁺ / v⁻","Gram-Schmidt","normalise · converged?"],PUR,F_PUR);
+ box(22,200,122,60,"Job list",["per (row, tile):","weights, duty, reads"],BLUE,F_BLUE);
+
+ // fpga
+ box(206,44,120,56,"UART",["host link","jobs in, sums out"],BLUE,F_BLUE);
+ box(206,120,120,70,"mac_fsm",["load · settle (198","periods) · sample","sum_pos / sum_neg"],PUR,F_PUR);
+ box(206,210,120,56,"mac_ctrl",["32-bit shift reg","4 × PWM, period 255"],BLUE,F_BLUE);
+ box(206,286,120,48,"25 MHz clock",["10.2 µs PWM period"],BLUE,F_BLUE);
+ box(470,60,136,60,"DAC driver (new)",["weights_dac → I²C/SPI","8-bit codes"],ORG,F_ORG);
+ box(470,150,136,60,"PWM + complement",["pwm[k], ~pwm[k]","dead-time gap (new)"],GREEN,F_GRN);
+ box(470,240,136,60,"XADC wrapper (new)",["adc_sample / adc_done","adc_data"],ORG,F_ORG);
+
+ // analog
+ box(666,50,104,58,"Quad DAC",["4 weight voltages","≤ ~1 V"],ORG,F_ORG);
+ box(666,150,104,70,"4 × SPDT switch",["S1: weight → node","S2: → ground"],GREEN,F_GRN);
+ box(800,150,86,70,"4 × Rf 10 kΩ",["into common","node"],GREEN,F_GRN);
+ box(906,150,76,70,"Σ node",["Cf 100 nF","Rl 1 MΩ","τ ≈ 252 µs"],GREEN,F_GRN);
+ box(906,250,76,52,"Buffer",["op-amp","follower"],ORG,F_ORG);
+ T2(821,342,"node → buffer → XADC input (JXADC header)",{"font-size":9});
+
+ // links
+ arrow("M144,100H175V72H206",PUR,"UART",176,64);
+ arrow("M326,72H350V150H326",BLUE,null);
+ arrow("M326,150H470",PUR,null);
+ arrow("M326,238H350V180H470",BLUE,"pwm[3:0]",410,174);
+ arrow("M326,160H440V90H470",ORG,"weights_dac",405,100);
+ arrow("M606,90H636V79H666",ORG,"SDA/SCL",636,70);
+ arrow("M606,180H640V185H666",GREEN,"gate",628,198);
+ arrow("M718,108V150",ORG,"Vw",730,132);
+ arrow("M770,185H800",GREEN,null);
+ arrow("M886,185H906",GREEN,null);
+ arrow("M944,220V250",ORG,null);
+ arrow("M906,276H630V270H606",ORG,"to XADC",740,292);
+ arrow("M470,270H440V176H326",ORG,"sum_pos, sum_neg",385,262);
+})();
+render(0);
+</script></body></html>

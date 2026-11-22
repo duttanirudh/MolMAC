@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catalyst Requirement Pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Plan: a bench instrument read-out. Cool blue-grey paper, ink-navy text; the two orbital-phase colours
+   (teal = wants electron-withdrawing, vermilion = wants electron-donating) are the only strong hues.
+   Layout: controls column on the left, result first on the right, then the six numbered pipeline stages. */
+:root {
+  --paper: #eef2f5; --panel: #ffffff; --ink: #14202c; --muted: #5a6877; --rule: #d3dbe3;
+  --accent: #2456a4; --pos: #0e7f7a; --neg: #c4472d; --amber: #c98a12;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f161d; --panel: #16202a; --ink: #e3eaf0; --muted: #93a3b3; --rule: #2a3744;
+    --accent: #7aa7ec; --pos: #3cc2b9; --neg: #f07a5e; --amber: #e9b04a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0f161d; --panel: #16202a; --ink: #e3eaf0; --muted: #93a3b3; --rule: #2a3744;
+  --accent: #7aa7ec; --pos: #3cc2b9; --neg: #f07a5e; --amber: #e9b04a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.5 var(--body); }
+header { padding: 28px 24px 8px; max-width: 1280px; margin: 0 auto; display: grid; gap: 6px; }
+h1 { font: 700 clamp(26px, 3.4vw, 38px)/1.05 var(--display); letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+header p { margin: 0; color: var(--muted); max-width: 72ch; }
+main { max-width: 1280px; margin: 0 auto; padding: 16px 24px 48px; display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; }
+#controls { position: sticky; top: 12px; display: grid; gap: 14px; }
+@media (max-width: 860px) { #controls { position: static; } }
+fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 10px; }
+legend { font: 600 12px/1 var(--body); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 8px; }
+label { display: grid; gap: 4px; font-size: 13.5px; }
+.row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.val { font: 500 12.5px var(--mono); color: var(--accent); font-variant-numeric: tabular-nums; }
+select, input[type="number"] { font: inherit; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); color: var(--ink); }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.seg label { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; cursor: pointer; font-size: 13px; }
+.seg label:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.seg input { accent-color: var(--accent); margin: 0; }
+.check { display: flex; align-items: center; gap: 8px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sub { display: grid; gap: 10px; padding-left: 10px; border-left: 2px solid var(--rule); }
+.hint { font-size: 12.5px; color: var(--muted); margin: 0; }
+#out { display: grid; gap: 20px; }
+.result h2 { font: 700 22px/1.2 var(--display); margin: 0 0 6px; }
+.result-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.pill { font: 600 12.5px var(--body); padding: 4px 10px; border-radius: 999px; }
+.pill.good { background: color-mix(in srgb, var(--pos) 16%, transparent); color: var(--pos); }
+.pill.bad { background: color-mix(in srgb, var(--neg) 16%, transparent); color: var(--neg); }
+#meta { font: 12.5px var(--mono); color: var(--muted); margin: 6px 0 12px; }
+#reqs { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.req { display: grid; grid-template-columns: 110px minmax(0, 1fr) 190px; gap: 12px; align-items: start; padding: 10px 12px; border-radius: 8px; border-left: 4px solid; background: var(--paper); }
+.req.pos { border-color: var(--pos); } .req.neg { border-color: var(--neg); }
+.req span { display: grid; gap: 2px; } .req small { color: var(--muted); font-size: 12px; font-family: var(--body); }
+.req-site { font: 600 16px var(--mono); } .req-what { font-weight: 600; }
+.req-num { font: 500 14px var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) { .req { grid-template-columns: 1fr; } .req-num { text-align: left; } }
+.warn { color: var(--neg); margin: 0; } .muted { color: var(--muted); margin: 0; }
+.stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 20px; }
+@media (max-width: 520px) { .stages { grid-template-columns: 1fr; } }
+.stage h3 { font: 700 16px/1.2 var(--display); margin: 0 0 2px; display: flex; gap: 10px; align-items: baseline; }
+.stage h3 b { font: 500 12px var(--mono); color: var(--accent); }
+.stage .what { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
+.fig { overflow-x: auto; } .fig svg { width: 100%; height: auto; display: block; }
+.note { font-size: 12.5px; color: var(--muted); margin: 8px 0 0; }
+.wide { grid-column: 1 / -1; }
+svg text { font-family: var(--mono); }
+.bond { stroke: var(--ink); stroke-width: 2; } .bond.thin { stroke-width: 1.2; opacity: 0.6; }
+.forming { stroke: var(--amber); stroke-width: 2; stroke-dasharray: 5 4; }
+.atom { fill: var(--panel); stroke: var(--ink); stroke-width: 1.5; } .atom.hetero { stroke: var(--neg); stroke-width: 2; }
+.atom-label { font-size: 10.5px; text-anchor: middle; fill: var(--ink); font-weight: 500; }
+.halo.pos { fill: var(--pos); fill-opacity: 0.28; } .halo.neg { fill: var(--neg); fill-opacity: 0.28; }
+.cell { fill: var(--accent); } .cellf { fill: var(--amber); stroke: var(--amber); stroke-width: 1.5; } .cell0 { fill: var(--paper); }
+.axis { font-size: 10.5px; fill: var(--muted); } .bad-t { fill: var(--neg); }
+.grid { stroke: var(--rule); stroke-width: 1; } .axisline { stroke: var(--muted); stroke-width: 1; }
+.ref { stroke: var(--amber); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.line { fill: none; stroke: var(--accent); stroke-width: 2; } .dot { fill: var(--accent); } .dot-mark { fill: var(--pos); stroke: var(--panel); stroke-width: 2; }
+.bar.pos { fill: var(--pos); } .bar.neg { fill: var(--neg); } .tick-e { stroke: var(--ink); stroke-width: 2; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--rule); }
+.sw.pos { background: var(--pos); } .sw.neg { background: var(--neg); }
+textarea { width: 100%; min-height: 220px; font: 12.5px/1.45 var(--mono); padding: 10px; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper); color: var(--ink); resize: vertical; }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 0; }
+button { font: 600 13px var(--body); padding: 8px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--panel); cursor: pointer; }
+button.ghost { background: transparent; color: var(--accent); }
+footer { max-width: 1280px; margin: 0 auto; padding: 0 24px 40px; color: var(--muted); font-size: 12.5px; }
+footer p { max-width: 90ch; margin: 0 0 6px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Catalyst requirement pipeline</h1>
+  <p>Pick a diene and dienophile. The pipeline builds their Hückel matrix, runs a low-precision or analog front end, refines the result exactly, and reports what an ideal catalyst environment would need at each atom.</p>
+</header>
+<main>
+  <form id="controls" class="panel" onsubmit="return false">
+    <fieldset>
+      <legend>Molecule</legend>
+      <label for="molecule">Reaction pair
+        <select id="molecule">
+          <option value="butadiene + acrolein" selected>Butadiene + acrolein</option>
+          <option value="butadiene + ethylene">Butadiene + ethylene (control)</option>
+          <option value="2-methoxybutadiene + acrolein">2-Methoxybutadiene + acrolein</option>
+          <option value="chain">Extended chain (size study)</option>
+        </select>
+      </label>
+      <div id="chain-opts" class="sub" hidden>
+        <label for="ld"><span class="row">Diene length <span class="val" id="ld-v"></span></span><input id="ld" type="range" min="4" max="20" step="2" value="12"></label>
+        <label for="le"><span class="row">Dienophile length <span class="val" id="le-v"></span></span><input id="le" type="range" min="2" max="20" step="1" value="12"></label>
+        <label class="check" for="endo"><input id="endo" type="checkbox" checked> Dienophile ends in C=O</label>
+      </div>
+      <label for="gamma"><span class="row">Coupling γ at forming bonds <span class="val" id="gamma-v"></span></span><input id="gamma" type="range" min="0.05" max="1" step="0.05" value="0.3"></label>
+      <label for="ho" id="ho-row"><span class="row"><span>Carbonyl O parameter h<sub>O</sub></span> <span class="val" id="ho-v"></span></span><input id="ho" type="range" min="0.5" max="2" step="0.25" value="1"></label>
+      <label for="kset">Bond parameters
+        <select id="kset"><option value="std" selected>All k = 1 (standard)</option><option value="2312">C=C 1.1, C–C 0.9</option></select>
+      </label>
+    </fieldset>
+    <fieldset>
+      <legend>Front end</legend>
+      <div class="seg">
+        <label><input type="radio" name="fe" value="fp64"> float64</label>
+        <label><input type="radio" name="fe" value="fp32"> float32</label>
+        <label><input type="radio" name="fe" value="fp16pair"> FP16-pair</label>
+        <label><input type="radio" name="fe" value="int8"> INT8</label>
+        <label style="grid-column: 1 / -1"><input type="radio" name="fe" value="analog" checked> Analog array (behavioral)</label>
+      </div>
+      <div id="analog-opts" class="sub">
+        <label for="adc"><span class="row">ADC resolution <span class="val" id="adc-v"></span></span><input id="adc" type="range" min="8" max="16" step="1" value="12"></label>
+        <label for="range">ADC range
+          <select id="range"><option value="fitted" selected>Fitted to each product</option><option value="worst">Worst-case column sum</option></select>
+        </label>
+        <label for="gain"><span class="row">Per-cell gain error σ <span class="val" id="gain-v"></span></span><input id="gain" type="range" min="0" max="5" step="0.06" value="0.12"></label>
+        <label for="offset"><span class="row">Column offset (of full scale) <span class="val" id="offset-v"></span></span><input id="offset" type="range" min="0" max="0.01" step="0.0001" value="0.0001"></label>
+        <label for="noise"><span class="row">Read noise (of full scale) <span class="val" id="noise-v"></span></span><input id="noise" type="range" min="0" max="0.003" step="0.00005" value="0.0001"></label>
+        <label for="chip">Simulated chip <input id="chip" type="number" min="0" max="9999" value="1"></label>
+        <p class="hint">Weights and duty cycles are 8-bit. Offset and noise levels are placeholders; only the gain figures come from measured MolMAC/VoltMatrix numbers.</p>
+      </div>
+      <label for="rseed">Refinement start (random seed) <input id="rseed" type="number" min="0" max="9999" value="7"></label>
+    </fieldset>
+  </form>
+
+  <div id="out">
+    <section class="panel result" aria-live="polite">
+      <div class="result-head"><h2>Ideal catalyst profile</h2><span id="status" class="pill"></span></div>
+      <div id="meta"></div>
+      <ol id="reqs"></ol>
+    </section>
+
+    <div class="stages">
+      <section class="panel stage">
+        <h3><b>01</b>Molecule</h3>
+        <p class="what">Diene (top, s-cis) over dienophile; dashed amber lines are the two bonds that form.</p>
+        <div class="fig" id="mol"></div><p class="note" id="mol-note"></p>
+      </section>
+      <section class="panel stage">
+        <h3><b>02</b>Hückel matrix H(γ)</h3>
+        <p class="what">π-electron model of the pair at a transition-state-like coupling γ.</p>
+        <div class="fig" id="matrix"></div><p class="note" id="matrix-note"></p>
+      </section>
+      <section class="panel stage">
+        <h3><b>03</b>Front end: SP2 purification</h3>
+        <p class="what">Matrix products only, in the selected precision. Output: the occupied-orbital projector.</p>
+        <div class="fig" id="sp2"></div><p class="note" id="sp2-note"></p>
+      </section>
+      <section class="panel stage">
+        <h3><b>04</b>Exact refinement</h3>
+        <p class="what">Ogita–Aishima steps in float64. Converges only if the front end landed inside the basin.</p>
+        <div class="fig" id="refine"></div><p class="note" id="refine-note"></p>
+      </section>
+      <section class="panel stage">
+        <h3><b>05</b>Sensitivity map</h3>
+        <p class="what">How an environment at each atom shifts the forming-bond imbalance (asynchronicity).</p>
+        <div class="fig" id="map"></div><p class="note" id="map-note"></p>
+      </section>
+      <section class="panel stage">
+        <h3><b>06</b>Catalyst report</h3>
+        <p class="what">Plain-text report of this run, ready to paste into notes.</p>
+        <textarea id="report" aria-label="Report" readonly></textarea>
+        <div class="btns"><button id="copy-md" type="button">Copy report</button><button id="copy-json" type="button" class="ghost">Copy as JSON</button></div>
+      </section>
+      <section class="panel stage wide">
+        <h3><b>06a</b>Rule table, every atom</h3>
+        <p class="what">Rank is within each fragment by the asynchronicity lever. “Sign stable” is the share of parameter variants (h<sub>O</sub>, bond set, γ) that give the same requirement.</p>
+        <div class="fig" id="table"></div>
+      </section>
+    </div>
+  </div>
+</main>
+<footer>
+  <p>Model limits: simple Hückel theory has no σ framework, sterics, solvent, geometry or Pauli repulsion. The requirements are a labelled heuristic, checked against known chemistry in three ways: Lewis-acid and H-bond catalysis at the carbonyl oxygen comes out as “withdrawing”, the all-carbon pair gives no lever, and an ether oxygen on the diene comes out as “donating”.</p>
+  <p>The analog front end is a behavioral simulation, not hardware. In this design it cannot save energy: the exact refinement alone costs about as much as diagonalizing H directly.</p>
+</footer>
+<script>
+// engine.js -- numerical core of the catalyst-requirement pipeline (browser + Node).
+// Hückel model in units of |beta| (alpha_C = 0, beta < 0): H_ii = -h_i, H_ij = -k_ij, forming bonds -gamma.
+// Mirrors the Python scripts (rules.py, scale.py, s2_oa.py, mc_budget.py); checked against them in test_engine.js.
+(function (root) {
+  "use strict";
+  const E_PI = { "C": 1, "O=": 1, "OR": 2 };
+  const KSETS = {
+    std: { "C=C": 1.0, "C-C": 1.0, "C=O": 1.0, "C-OR": 0.8 },
+    "2312": { "C=C": 1.1, "C-C": 0.9, "C=O": 1.0, "C-OR": 0.8 },
+  };
+
+  // ---------- molecules ----------
+  function butadiene() {
+    return {
+      atoms: [{ t: "C", frag: "diene", name: "C1" }, { t: "C", frag: "diene", name: "C2" },
+              { t: "C", frag: "diene", name: "C3" }, { t: "C", frag: "diene", name: "C4" }],
+      bonds: [[0, 1, "C=C"], [1, 2, "C-C"], [2, 3, "C=C"]],
+    };
+  }
+  function presets() {
+    const out = {};
+    let d = butadiene();
+    out["butadiene + ethylene"] = {
+      atoms: d.atoms.concat([{ t: "C", frag: "dienophile", name: "C5" }, { t: "C", frag: "dienophile", name: "C6" }]),
+      bonds: d.bonds.concat([[4, 5, "C=C"]]), form: [[0, 4], [3, 5]],
+    };
+    d = butadiene();
+    out["butadiene + acrolein"] = {
+      atoms: d.atoms.concat([{ t: "C", frag: "dienophile", name: "Cb" }, { t: "C", frag: "dienophile", name: "Ca" },
+                             { t: "C", frag: "dienophile", name: "Cc" }, { t: "O=", frag: "dienophile", name: "O" }]),
+      bonds: d.bonds.concat([[4, 5, "C=C"], [5, 6, "C-C"], [6, 7, "C=O"]]), form: [[0, 4], [3, 5]],
+    };
+    d = butadiene();
+    out["2-methoxybutadiene + acrolein"] = {
+      atoms: d.atoms.concat([{ t: "OR", frag: "diene", name: "O(Me)" },
+                             { t: "C", frag: "dienophile", name: "Cb" }, { t: "C", frag: "dienophile", name: "Ca" },
+                             { t: "C", frag: "dienophile", name: "Cc" }, { t: "O=", frag: "dienophile", name: "O" }]),
+      bonds: d.bonds.concat([[1, 4, "C-OR"], [5, 6, "C=C"], [6, 7, "C-C"], [7, 8, "C=O"]]), form: [[0, 5], [3, 6]],
+    };
+    return out;
+  }
+  // Extended family: polyene diene (LD atoms) + polyene / polyenal dienophile (LE atoms), forming bonds C1-Cb, C4-Ca.
+  function chain(LD, LE, endO) {
+    const atoms = [], bonds = [];
+    for (let i = 0; i < LD; i++) atoms.push({ t: "C", frag: "diene", name: "C" + (i + 1) });
+    for (let i = 0; i < LD - 1; i++) bonds.push([i, i + 1, i % 2 === 0 ? "C=C" : "C-C"]);
+    const names = ["Cb", "Ca"];
+    for (let i = 0; i < LE; i++) {
+      const last = i === LE - 1;
+      const t = endO && last ? "O=" : "C";
+      const nm = endO && last ? "O" : (i < 2 ? names[i] : "D" + (i + 1));
+      atoms.push({ t, frag: "dienophile", name: nm });
+    }
+    for (let i = 0; i < LE - 1; i++) {
+      const last = i === LE - 2;
+      bonds.push([LD + i, LD + i + 1, endO && last ? "C=O" : (i % 2 === 0 ? "C=C" : "C-C")]);
+    }
+    return { atoms, bonds, form: [[0, LD], [3, LD + 1]] };
+  }
+
+  function buildH(spec, gamma, p) {
+    p = p || {};
+    const hO = p.hO ?? 1.0, hOR = p.hOR ?? 2.0, ks = Object.assign({}, KSETS[p.kset || "std"], p.kOverride || {});
+    const N = spec.atoms.length, H = zeros(N, N);
+    spec.atoms.forEach((a, i) => { H[i][i] = -({ "C": 0, "O=": hO, "OR": hOR })[a.t]; });
+    spec.bonds.forEach(([i, j, kind]) => { H[i][j] = H[j][i] = -ks[kind]; });
+    spec.form.forEach(([i, j]) => { H[i][j] = H[j][i] = -gamma; });
+    const ne = spec.atoms.reduce((s, a) => s + E_PI[a.t], 0);
+    return { H, no: ne / 2 };
+  }
+
+  // ---------- linear algebra (dense, small N) ----------
+  function zeros(n, m) { const A = new Array(n); for (let i = 0; i < n; i++) A[i] = new Array(m).fill(0); return A; }
+  function eye(n) { const A = zeros(n, n); for (let i = 0; i < n; i++) A[i][i] = 1; return A; }
+  function matmul(A, B) {
+    const n = A.length, k = B.length, m = B[0].length, C = zeros(n, m);
+    for (let i = 0; i < n; i++) { const Ai = A[i], Ci = C[i];
+      for (let p = 0; p < k; p++) { const a = Ai[p]; if (a === 0) continue; const Bp = B[p];
+        for (let j = 0; j < m; j++) Ci[j] += a * Bp[j]; } }
+    return C;
+  }
+  function T(A) { const n = A.length, m = A[0].length, B = zeros(m, n);
+    for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) B[j][i] = A[i][j]; return B; }
+  function trace(A) { let s = 0; for (let i = 0; i < A.length; i++) s += A[i][i]; return s; }
+  function map2(A, f) { return A.map((r, i) => r.map((v, j) => f(v, i, j))); }
+  function cols(A, idx) { return A.map(r => idx.map(j => r[j])); }
+  function hcat(A, B) { return A.map((r, i) => r.concat(B[i])); }
+  function maxAbs(A) { let m = 0; for (const r of A) for (const v of r) { const a = Math.abs(v); if (a > m) m = a; } return m; }
+  function finite(A) { for (const r of A) for (const v of r) if (!Number.isFinite(v)) return false; return true; }
+
+  // Cyclic Jacobi eigensolver for symmetric matrices; eigenvalues ascending, eigenvectors as columns.
+  function eigh(A0) {
+    const n = A0.length, A = A0.map(r => r.slice()), V = eye(n);
+    for (let sweep = 0; sweep < 100; sweep++) {
+      let off = 0, tot = 0;
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { const s = A[i][j] * A[i][j]; tot += s; if (i !== j) off += s; }
+      if (off <= 1e-30 * Math.max(tot, 1e-300)) break;
+      for (let p = 0; p < n - 1; p++) for (let q = p + 1; q < n; q++) {
+        const apq = A[p][q]; if (Math.abs(apq) < 1e-300) continue;
+        const theta = (A[q][q] - A[p][p]) / (2 * apq);
+        const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
+        const c = 1 / Math.sqrt(t * t + 1), s = t * c;
+        for (let k = 0; k < n; k++) { const akp = A[k][p], akq = A[k][q]; A[k][p] = c * akp - s * akq; A[k][q] = s * akp + c * akq; }
+        for (let k = 0; k < n; k++) { const apk = A[p][k], aqk = A[q][k]; A[p][k] = c * apk - s * aqk; A[q][k] = s * apk + c * aqk; }
+        for (let k = 0; k < n; k++) { const vkp = V[k][p], vkq = V[k][q]; V[k][p] = c * vkp - s * vkq; V[k][q] = s * vkp + c * vkq; }
+      }
+    }
+    const order = [...Array(n).keys()].sort((a, b) => A[a][a] - A[b][b]);
+    return { e: order.map(i => A[i][i]), V: V.map(r => order.map(i => r[i])) };
+  }
+  function qr(A) { // modified Gram-Schmidt, returns Q with orthonormal columns
+    const n = A.length, m = A[0].length, Q = A.map(r => r.slice());
+    for (let j = 0; j < m; j++) {
+      for (let k = 0; k < j; k++) { let d = 0; for (let i = 0; i < n; i++) d += Q[i][k] * Q[i][j];
+        for (let i = 0; i < n; i++) Q[i][j] -= d * Q[i][k]; }
+      let nr = 0; for (let i = 0; i < n; i++) nr += Q[i][j] * Q[i][j]; nr = Math.sqrt(nr) || 1;
+      for (let i = 0; i < n; i++) Q[i][j] /= nr;
+    }
+    return Q;
+  }
+
+  // ---------- seeded randomness ----------
+  function rng(seed) { let a = (seed >>> 0) || 1;
+    const u = () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    let spare = null;
+    const gauss = () => { if (spare !== null) { const s = spare; spare = null; return s; }
+      let x, y, r; do { x = 2 * u() - 1; y = 2 * u() - 1; r = x * x + y * y; } while (r >= 1 || r === 0);
+      const f = Math.sqrt(-2 * Math.log(r) / r); spare = y * f; return x * f; };
+    return { u, gauss };
+  }
+
+  // ---------- number formats ----------
+  const f32 = Math.fround;
+  function half(x) { // round to nearest IEEE half (with subnormals); overflow -> Infinity
+    if (x === 0 || !Number.isFinite(x)) return x;
+    const ax = Math.abs(x); if (ax >= 65520) return Math.sign(x) * Infinity;
+    let e = Math.floor(Math.log2(ax)); if (e < -14) e = -14;
+    const sp = Math.pow(2, e - 10); return Math.sign(x) * Math.round(ax / sp) * sp;
+  }
+  function mmF32(A, B) { const n = A.length, k = B.length, m = B[0].length, C = zeros(n, m);
+    for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) { let s = 0;
+      for (let p = 0; p < k; p++) s = f32(s + f32(f32(A[i][p]) * f32(B[p][j]))); C[i][j] = s; }
+    return C; }
+  function mmFP16pair(A, B) {
+    const Ah = map2(A, v => half(f32(v))), Al = map2(A, (v, i, j) => half(f32(f32(v) - Ah[i][j])));
+    const Bh = map2(B, v => half(f32(v))), Bl = map2(B, (v, i, j) => half(f32(f32(v) - Bh[i][j])));
+    const n = A.length, k = B.length, m = B[0].length, C = zeros(n, m);
+    for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) { let s = 0;
+      for (let p = 0; p < k; p++) s = f32(s + f32(Ah[i][p] * Bh[p][j] + Ah[i][p] * Bl[p][j] + Al[i][p] * Bh[p][j])); C[i][j] = s; }
+    return C;
+  }
+  function mmInt(bits) { const L = Math.pow(2, bits - 1) - 1;
+    return (A, B) => { const sa = maxAbs(A) || 1, sb = maxAbs(B) || 1;
+      const Aq = map2(A, v => Math.round(v / sa * L)), Bq = map2(B, v => Math.round(v / sb * L));
+      return map2(matmul(Aq, Bq), v => f32(v * sa * sb / L / L)); }; }
+  // Analog behavioral chain (as mc_budget.py): wBits weights with per-cell gain, dBits duty per polarity
+  // (two signed passes), static column offsets per pass, read noise per read, adcBits ADC (fitted or worst-case range).
+  function mmAnalog(o, N) {
+    const st = rng(1000 + (o.seed | 0)), nz = rng(5000 + (o.seed | 0));
+    const G = zeros(N, N).map(r => r.map(() => 1 + (o.gain || 0) * st.gauss()));
+    const op = Array.from({ length: N }, () => (o.offset || 0) * st.gauss());
+    const on = Array.from({ length: N }, () => (o.offset || 0) * st.gauss());
+    const Lw = Math.pow(2, (o.wBits || 8) - 1) - 1, Ld = Math.pow(2, o.dBits || 8) - 1;
+    return (X, Y) => {
+      const n = X.length, m = Y[0].length;
+      const sw = maxAbs(Y) || 1, sa = maxAbs(X) || 1;
+      const W = map2(Y, (v, i, j) => Math.round(v / sw * Lw) / Lw * G[i][j]);
+      const FSw = Array.from({ length: m }, (_, j) => W.reduce((s, r) => s + Math.abs(r[j]), 0) + 1e-30);
+      const out = zeros(n, m);
+      for (const [sg, off] of [[1, op], [-1, on]]) {
+        const dty = map2(X, v => Math.round(Math.max(sg * v, 0) / sa * Ld) / Ld);
+        const Z = matmul(dty, W);
+        for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) {
+          Z[i][j] += off[j] * FSw[j]; if (o.noise) Z[i][j] += o.noise * FSw[j] * nz.gauss(); }
+        for (let j = 0; j < m; j++) {
+          let FS = FSw[j];
+          if (o.fitted) { FS = 1e-30; for (let i = 0; i < n; i++) FS = Math.max(FS, Math.abs(Z[i][j])); }
+          const step = 2 * FS / Math.pow(2, o.adcBits || 12);
+          for (let i = 0; i < n; i++) out[i][j] += sg * Math.max(-FS, Math.min(FS, Math.round(Z[i][j] / step) * step));
+        }
+      }
+      return map2(out, v => f32(v * sa * sw));
+    };
+  }
+  function frontEnd(kind, opts, N) {
+    if (kind === "fp64") return { mm: matmul, store: v => v };
+    if (kind === "fp32") return { mm: mmF32, store: f32 };
+    if (kind === "fp16pair") return { mm: mmFP16pair, store: f32 };
+    if (kind === "int8") return { mm: mmInt(8), store: f32 };
+    if (kind === "int") return { mm: mmInt(opts.bits || 10), store: f32 };
+    if (kind === "analog") return { mm: mmAnalog(opts, N), store: f32 };
+    throw new Error("unknown front end " + kind);
+  }
+
+  // ---------- SP2 purification (trace-correcting, stall rule, divergence guard) ----------
+  function gershgorin(H) { let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < H.length; i++) { let r = 0; for (let j = 0; j < H.length; j++) if (j !== i) r += Math.abs(H[i][j]);
+      lo = Math.min(lo, H[i][i] - r); hi = Math.max(hi, H[i][i] + r); } return [lo, hi]; }
+  function sp2(H, no, fe, maxIter) {
+    const N = H.length, [a, b] = gershgorin(H);
+    let X = map2(H, (v, i, j) => fe.store(((i === j ? b : 0) - v) / (b - a)));
+    const hist = []; let it = 0, diverged = false;
+    for (it = 1; it <= (maxIter || 200); it++) {
+      const X2 = map2(fe.mm(X, X), fe.store), t1 = trace(X), t2 = trace(X2);
+      X = Math.abs(t2 - no) < Math.abs(2 * t1 - t2 - no) ? X2 : map2(X, (v, i, j) => fe.store(2 * v - X2[i][j]));
+      if (!finite(X) || maxAbs(X) > 1e3) { diverged = true; break; }
+      let sq = 0; for (const r of X) for (const v of r) sq += v * v;
+      hist.push(Math.abs(trace(X) - sq));
+      if (it > 4 && hist[hist.length - 1] >= hist[hist.length - 3]) break;
+    }
+    return { X, iters: it, hist, diverged };
+  }
+
+  // ---------- observables and refinement ----------
+  function sensitivity(Co, Cv, eo, ev, form) { // dI/d(lower alpha_k), first-order perturbation theory
+    const N = Co.length, no = eo.length, nv = ev.length, [[a, b], [c, d]] = form, s = new Array(N).fill(0);
+    const M = zeros(no, nv);
+    for (let i = 0; i < no; i++) for (let j = 0; j < nv; j++) {
+      const B = 0.5 * (Co[a][i] * Cv[b][j] + Co[b][i] * Cv[a][j]) - 0.5 * (Co[c][i] * Cv[d][j] + Co[d][i] * Cv[c][j]);
+      M[i][j] = B / (eo[i] - ev[j]); }
+    for (let k = 0; k < N; k++) { let t = 0;
+      for (let i = 0; i < no; i++) for (let j = 0; j < nv; j++) t += Co[k][i] * M[i][j] * Cv[k][j];
+      s[k] = -4 * t; }
+    return s;
+  }
+  function exact(H, no, form) {
+    const { e, V } = eigh(H), N = H.length;
+    const Co = cols(V, [...Array(no).keys()]), Cv = cols(V, [...Array(N - no).keys()].map(i => i + no));
+    return { e, Co, Cv, eo: e.slice(0, no), ev: e.slice(no), map: sensitivity(Co, Cv, e.slice(0, no), e.slice(no), form) };
+  }
+  function oaStep(X, H, delta1) {
+    const N = H.length, R = map2(matmul(T(X), X), (v, i, j) => (i === j ? 1 : 0) - v), S = matmul(T(X), matmul(H, X));
+    const d = S.map((r, i) => r[i] / (1 - R[i][i]));
+    const E = map2(S, (v, i, j) => i === j ? R[i][i] / 2 : (Math.abs(d[j] - d[i]) >= delta1 ? (v + d[j] * R[i][j]) / (d[j] - d[i]) : R[i][j] / 2));
+    const XE = matmul(X, E); return { X: map2(X, (v, i, j) => v + XE[i][j]), d };
+  }
+  function relErr(s, ref) { let m = 0, r = 0;
+    for (let k = 0; k < s.length; k++) { if (!Number.isFinite(s[k])) return Infinity; m = Math.max(m, Math.abs(s[k] - ref[k])); r = Math.max(r, Math.abs(ref[k])); }
+    return r > 0 ? m / r : m; }
+  // Range finder -> one Rayleigh-Ritz per block -> Ogita-Aishima steps (float64). Returns per-step errors.
+  function refine(P, H, no, form, ref, o) {
+    o = o || {}; const N = H.length, g = rng(o.seed ?? 7), kmax = o.kmax ?? 10, target = o.target ?? 1e-5;
+    const Ro = zeros(N, no).map(r => r.map(() => g.gauss())), Rv = zeros(N, N - no).map(r => r.map(() => g.gauss()));
+    let Co = qr(matmul(P, Ro));
+    const Q = qr(matmul(map2(P, (v, i, j) => (i === j ? 1 : 0) - v), Rv));
+    const CoTQ = matmul(T(Co), Q), CoCoTQ = matmul(Co, CoTQ);
+    let Cv = qr(map2(Q, (v, i, j) => v - CoCoTQ[i][j]));
+    const rr = C => { const { e, V } = eigh(matmul(T(C), matmul(H, C))); return { C: matmul(C, V), e }; };
+    const o1 = rr(Co), v1 = rr(Cv);
+    let X = hcat(o1.C, v1.C), d = o1.e.concat(v1.e);
+    const steps = []; let reachedAt = null, last = null;
+    for (let k = 0; k <= kmax; k++) {
+      if (!finite(X) || maxAbs(X) > 1e3) { steps.push({ k, err: Infinity }); break; }
+      const order = [...Array(N).keys()].sort((a, b) => d[a] - d[b]);
+      const oi = order.slice(0, no), vi = order.slice(no);
+      const cur = { Co: cols(X, oi), Cv: cols(X, vi), eo: oi.map(i => d[i]), ev: vi.map(i => d[i]) };
+      const map = sensitivity(cur.Co, cur.Cv, cur.eo, cur.ev, form), err = relErr(map, ref);
+      steps.push({ k, err }); last = Object.assign(cur, { map });
+      if (err <= target && reachedAt === null) reachedAt = k;
+      if (reachedAt !== null && k >= reachedAt + 1) break;
+      const nx = oaStep(X, H, o.delta1 ?? 1e-10); X = nx.X; d = nx.d;
+    }
+    return { steps, reachedAt, last };
+  }
+
+  // ---------- rule table ----------
+  function variants(spec) {
+    const hasO = spec.atoms.some(a => a.t === "O="), hasOR = spec.atoms.some(a => a.t === "OR");
+    const out = [];
+    for (const hO of hasO ? [0.5, 1, 2] : [1]) for (const hOR of hasOR ? [1.5, 2, 2.5] : [2])
+      for (const kOR of hasOR ? [0.6, 0.8, 1.0] : [0.8]) for (const kset of ["std", "2312"]) for (const g of [0.1, 0.3, 0.5])
+        out.push({ p: { hO, hOR, kset, kOverride: { "C-OR": kOR } }, gamma: g });
+    return out;
+  }
+  function leversExact(spec, gamma, p) {
+    const { H, no } = buildH(spec, gamma, p), H0 = buildH(spec, 0, p).H;
+    const x = exact(H, no, spec.form), x0 = exact(H0, no, spec.form);
+    const q = rowsSq(x.Co), q0 = rowsSq(x0.Co);
+    return { LA: x.map, LE: q.map((v, k) => v - q0[k]) };
+  }
+  function rowsSq(Co) { return Co.map(r => 2 * r.reduce((s, v) => s + v * v, 0)); }
+  function ruleTable(spec, gamma, p, refined) {
+    // refined: { Co, Cv, eo, ev, map } from the pipeline (used for the levers shown); robustness from exact variants.
+    const N = spec.atoms.length, tol = 1e-9;
+    const q = rowsSq(refined.Co), x0 = exact(buildH(spec, 0, p).H, refined.eo.length, spec.form), q0 = rowsSq(x0.Co);
+    const LE = q.map((v, k) => v - q0[k]), LA = refined.map;
+    const vs = variants(spec).map(v => leversExact(spec, v.gamma, v.p));
+    const sgn = v => Math.abs(v) < tol ? 0 : Math.sign(v);
+    const rows = spec.atoms.map((a, k) => {
+      const s = sgn(LA[k]); const reach = a.t === "C" ? "through-space only" : "directed binding";
+      let env = "no lever";
+      if (s !== 0) env = a.t === "C" ? (s > 0 ? "withdrawing (positive charge nearby)" : "donating (negative charge nearby)")
+        : (s > 0 ? "withdrawing (H-bond donor or Lewis acid on the lone pair)" : "donating (negative charge nearby; no H-bond donor on this lone pair)");
+      const robust = vs.filter(v => sgn(v.LA[k]) === s).length / vs.length;
+      return { k, name: a.name, frag: a.frag, type: a.t, LA: LA[k], LE: LE[k], sign: s, env, reach, robust,
+               alsoBind: s !== 0 && sgn(LE[k]) === s };
+    });
+    for (const frag of ["diene", "dienophile"]) rows.filter(r => r.frag === frag)
+      .sort((x, y) => Math.abs(y.LA) - Math.abs(x.LA)).forEach((r, i) => { r.rank = i + 1; });
+    return rows;
+  }
+  function summary(rows, top) {
+    const out = [];
+    for (const frag of ["diene", "dienophile"]) {
+      const fr = rows.filter(r => r.frag === frag && r.sign !== 0);
+      const directed = fr.filter(r => r.reach === "directed binding");
+      const space = fr.filter(r => r.reach !== "directed binding").sort((a, b) => a.rank - b.rank).slice(0, top || 2);
+      for (const r of directed.concat(space)) out.push(r);
+    }
+    return out;
+  }
+
+  root.Engine = { presets, chain, buildH, eigh, exact, sp2, frontEnd, refine, ruleTable, summary, gershgorin,
+                  KSETS, relErr, matmul, rng, half };
+})(typeof window !== "undefined" ? window : globalThis);
+
+</script>
+<script>
+// app.js -- interface for the catalyst-requirement pipeline. Uses window.Engine (engine.js).
+(function () {
+  "use strict";
+  const E = window.Engine, $ = id => document.getElementById(id);
+  const PRESETS = E.presets();
+  const state = { last: null };
+
+  // ---------- inputs ----------
+  function readInputs() {
+    const molecule = $("molecule").value;
+    let spec;
+    if (molecule === "chain") spec = E.chain(+$("ld").value, +$("le").value, $("endo").checked);
+    else spec = PRESETS[molecule];
+    const fe = document.querySelector('input[name="fe"]:checked').value;
+    return {
+      molecule, spec, gamma: +$("gamma").value, hO: +$("ho").value, kset: $("kset").value, fe,
+      analog: { adcBits: +$("adc").value, fitted: $("range").value === "fitted", gain: +$("gain").value / 100,
+                offset: +$("offset").value, noise: +$("noise").value, seed: +$("chip").value, wBits: 8, dBits: 8 },
+      rseed: +$("rseed").value,
+    };
+  }
+  function syncLabels() {
+    $("gamma-v").textContent = (+$("gamma").value).toFixed(2);
+    $("ho-v").textContent = (+$("ho").value).toFixed(2);
+    $("ld-v").textContent = $("ld").value; $("le-v").textContent = $("le").value;
+    $("adc-v").textContent = $("adc").value + " bits";
+    $("gain-v").textContent = (+$("gain").value).toFixed(2) + "%";
+    $("offset-v").textContent = (+$("offset").value).toExponential(0).replace("0e+0", "0");
+    $("noise-v").textContent = (+$("noise").value).toExponential(0).replace("0e+0", "0");
+    $("chain-opts").hidden = $("molecule").value !== "chain";
+    $("analog-opts").hidden = document.querySelector('input[name="fe"]:checked').value !== "analog";
+    const spec = $("molecule").value === "chain" ? E.chain(+$("ld").value, +$("le").value, $("endo").checked) : PRESETS[$("molecule").value];
+    $("ho-row").hidden = !spec.atoms.some(a => a.t === "O=");
+  }
+
+  // ---------- run ----------
+  function run() {
+    syncLabels();
+    const inp = readInputs(), spec = inp.spec, p = { hO: inp.hO, kset: inp.kset };
+    const t0 = performance.now();
+    const { H, no } = E.buildH(spec, inp.gamma, p), N = H.length;
+    const ex = E.exact(H, no, spec.form);
+    const fe = E.frontEnd(inp.fe, inp.analog, N);
+    const sp = E.sp2(H, no, fe);
+    const rf = E.refine(sp.X, H, no, spec.form, ex.map, { seed: inp.rseed, kmax: 10, target: 1e-5 });
+    const ok = rf.reachedAt !== null;
+    const refined = ok ? rf.last : null;
+    const rows = ok ? E.ruleTable(spec, inp.gamma, p, refined) : null;
+    const ms = performance.now() - t0;
+    const gap = ex.e[no] - ex.e[no - 1];
+    const I = ok ? imbalance(refined.Co, spec.form) : null;
+    state.last = { inp, spec, H, no, ex, sp, rf, ok, rows, ms, gap, I };
+    render();
+  }
+  function imbalance(Co, form) {
+    const [[a, b], [c, d]] = form; let s = 0;
+    for (let i = 0; i < Co[0].length; i++) s += 2 * (Co[a][i] * Co[b][i] - Co[c][i] * Co[d][i]);
+    return s;
+  }
+
+  // ---------- rendering ----------
+  const FE_NAME = { fp64: "float64 (exact digital)", fp32: "float32", fp16pair: "FP16-pair, FP32 accumulate", int8: "INT8 digital", analog: "Analog array (behavioral model)" };
+  function render() {
+    const L = state.last;
+    renderSummary(L); renderMolecule(L); renderMatrix(L); renderSP2(L); renderRefine(L); renderMap(L); renderTable(L); renderReport(L);
+  }
+  function fmt(v, d) { return (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(d ?? 4); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+
+  function renderSummary(L) {
+    const pill = $("status");
+    if (L.ok) { pill.className = "pill good"; pill.textContent = `Refined to 1e-5 in ${L.rf.reachedAt} Ogita–Aishima step${L.rf.reachedAt === 1 ? "" : "s"}`; }
+    else { pill.className = "pill bad"; pill.textContent = L.sp.diverged ? "Front end diverged" : "Refinement did not converge"; }
+    $("meta").textContent = `${L.spec.atoms.length} π centres · ${L.no} occupied orbitals · HOMO–LUMO gap ${L.gap.toFixed(3)}|β| · ${FE_NAME[L.inp.fe]} · ${L.ms.toFixed(0)} ms`;
+    const box = $("reqs");
+    if (!L.ok) {
+      box.innerHTML = `<p class="warn">The front end did not land the start inside the refiner’s convergence basin, so no catalyst profile is reported. Raise the ADC resolution, lower the noise, or pick a more precise front end. This is the precision budget at work: larger molecules need more bits.</p>`;
+      return;
+    }
+    const sel = E.summary(L.rows, 2);
+    if (!sel.length) { box.innerHTML = `<p class="muted">No electrostatic lever at this level of theory. In an alternant hydrocarbon pair every charge stays at 1 and the forming bonds stay balanced, so the Hückel model gives a catalyst nothing to act on.</p>`; return; }
+    box.innerHTML = sel.map(r => `<li class="req ${r.sign > 0 ? "pos" : "neg"}">
+        <span class="req-site">${esc(r.name)}<small>${r.frag}</small></span>
+        <span class="req-what">${esc(r.env.split(" (")[0])} environment<small>${esc(r.env.includes("(") ? r.env.slice(r.env.indexOf("(") + 1, -1) : "")}</small></span>
+        <span class="req-num">${fmt(r.LA)}<small>${r.reach} · sign stable in ${(100 * r.robust).toFixed(0)}% of variants</small></span></li>`).join("");
+  }
+
+  // Molecule: s-cis diene arc on top, dienophile underneath, forming bonds dashed; halo = lever.
+  function layout(spec) {
+    const s = 52, pos = new Array(spec.atoms.length);
+    const dC = spec.atoms.map((a, i) => i).filter(i => spec.atoms[i].frag === "diene" && spec.atoms[i].t === "C");
+    const dp = spec.atoms.map((a, i) => i).filter(i => spec.atoms[i].frag === "dienophile");
+    const x0 = 60, y1 = 120, y2 = 210;
+    const U = [[x0, y1], [x0 + 0.5 * s, y1 - 0.87 * s], [x0 + 1.5 * s, y1 - 0.87 * s], [x0 + 2 * s, y1]];
+    dC.forEach((idx, j) => { if (j < 4) pos[idx] = U[j]; else { const prev = pos[dC[j - 1]]; pos[idx] = [prev[0] + 0.87 * s, j % 2 === 0 ? y1 : y1 - 0.5 * s]; } });
+    dp.forEach((idx, j) => {
+      if (j === 0) pos[idx] = [x0, y2]; else if (j === 1) pos[idx] = [x0 + 2 * s, y2];
+      else { const prev = pos[dp[j - 1]]; pos[idx] = [prev[0] + 0.87 * s, j % 2 === 0 ? y2 : y2 + 0.5 * s]; } });
+    spec.atoms.forEach((a, i) => { if (!pos[i]) { // substituent: above its partner
+      const b = spec.bonds.find(([u, v]) => u === i || v === i), o = b[0] === i ? b[1] : b[0];
+      pos[i] = [pos[o][0], pos[o][1] - 0.9 * s]; } });
+    return pos;
+  }
+  function renderMolecule(L) {
+    const spec = L.spec, pos = layout(spec), lev = L.ok ? L.rows.map(r => r.LA) : null;
+    const mx = lev ? Math.max(1e-12, ...lev.map(Math.abs)) : 1;
+    const xs = pos.map(p => p[0]), ys = pos.map(p => p[1]);
+    const minX = Math.min(...xs) - 50, maxX = Math.max(...xs) + 50, minY = Math.min(...ys) - 50, maxY = Math.max(...ys) + 55;
+    let g = "";
+    spec.bonds.forEach(([i, j, kind]) => {
+      const [a, b] = [pos[i], pos[j]];
+      g += `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" class="bond"/>`;
+      if (kind.includes("=")) { const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy), ox = -dy / l * 4, oy = dx / l * 4;
+        g += `<line x1="${a[0] + ox}" y1="${a[1] + oy}" x2="${b[0] + ox}" y2="${b[1] + oy}" class="bond thin"/>`; } });
+    spec.form.forEach(([i, j]) => { const [a, b] = [pos[i], pos[j]];
+      g += `<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" class="forming"/>`; });
+    spec.atoms.forEach((at, i) => {
+      const [x, y] = pos[i];
+      if (lev && Math.abs(lev[i]) > 1e-9) { const r = 14 + 22 * Math.abs(lev[i]) / mx;
+        g += `<circle cx="${x}" cy="${y}" r="${r.toFixed(1)}" class="halo ${lev[i] > 0 ? "pos" : "neg"}"><title>${esc(at.name)}: lever ${fmt(lev[i])}</title></circle>`; }
+      g += `<circle cx="${x}" cy="${y}" r="13" class="atom ${at.t === "C" ? "" : "hetero"}"/>`;
+      g += `<text x="${x}" y="${y + 4}" class="atom-label">${esc(at.name.replace("(Me)", ""))}</text>`;
+    });
+    $("mol").innerHTML = `<svg viewBox="${minX} ${minY} ${maxX - minX} ${maxY - minY}" style="max-width:${Math.round(1.25 * (maxX - minX))}px;margin:0 auto" role="img" aria-label="Diene above, dienophile below, forming bonds dashed">${g}</svg>`;
+    $("mol-note").textContent = L.ok
+      ? "Halo size = how strongly an environment at that atom shifts the forming-bond imbalance; teal wants an electron-withdrawing contact, vermilion an electron-donating one."
+      : "Halos appear once the refinement converges.";
+  }
+
+  function renderMatrix(L) {
+    const H = L.H, N = H.length, c = Math.max(8, Math.min(24, Math.floor(420 / N))), lab = N <= 16, pad = lab ? 34 : 6;
+    let mx = 0; H.forEach(r => r.forEach(v => { mx = Math.max(mx, Math.abs(v)); }));
+    const formSet = new Set(L.spec.form.flatMap(([i, j]) => [i + "," + j, j + "," + i]));
+    let g = "";
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      const v = H[i][j], a = Math.abs(v) / mx;
+      g += `<rect x="${pad + j * c}" y="${pad + i * c}" width="${c - 1}" height="${c - 1}" class="${v === 0 ? "cell0" : (formSet.has(i + "," + j) ? "cellf" : "cell")}" style="fill-opacity:${v === 0 ? 1 : (0.15 + 0.85 * a).toFixed(2)}"><title>H[${L.spec.atoms[i].name},${L.spec.atoms[j].name}] = ${v.toFixed(3)}</title></rect>`;
+    }
+    if (lab) L.spec.atoms.forEach((a, i) => {
+      g += `<text x="${pad - 5}" y="${pad + i * c + c / 2 + 3}" class="axis" text-anchor="end">${esc(a.name)}</text>`;
+      g += `<text x="${pad + i * c + c / 2}" y="${pad - 6}" class="axis" text-anchor="middle">${esc(a.name)}</text>`; });
+    const W = pad + N * c + 4;
+    $("matrix").innerHTML = `<svg viewBox="0 0 ${W} ${W}" style="max-width:${W}px" role="img" aria-label="Hückel matrix heatmap">${g}</svg>`;
+    $("matrix-note").textContent = `${N}×${N}, units of |β|. Darker = larger magnitude; the two outlined amber cells are the forming bonds at γ = ${L.inp.gamma.toFixed(2)}.`;
+  }
+
+  // Log-scale line chart drawn by hand.
+  function logChart(el, ys, o) {
+    const W = 520, Hh = 210, l = 52, r = 14, t = 14, b = 34;
+    const vals = ys.filter(v => Number.isFinite(v) && v > 0);
+    const lo = Math.floor(Math.log10(Math.min(o.floor ?? 1e-16, ...vals, o.ref ?? 1))), hi = Math.ceil(Math.log10(Math.max(...vals, o.ref ?? 1e-16, 1)));
+    const n = Math.max(ys.length - 1, 1), X = i => l + (W - l - r) * i / n, Y = v => t + (Hh - t - b) * (hi - Math.log10(v)) / (hi - lo || 1);
+    let g = "";
+    for (let d = lo; d <= hi; d += Math.max(1, Math.round((hi - lo) / 6))) {
+      g += `<line x1="${l}" x2="${W - r}" y1="${Y(10 ** d)}" y2="${Y(10 ** d)}" class="grid"/><text x="${l - 6}" y="${Y(10 ** d) + 4}" class="axis" text-anchor="end">1e${d}</text>`; }
+    ys.forEach((_, i) => { if (n <= 12 || i % Math.ceil(n / 10) === 0) g += `<text x="${X(i)}" y="${Hh - b + 16}" class="axis" text-anchor="middle">${i + (o.x0 ?? 0)}</text>`; });
+    g += `<text x="${(l + W - r) / 2}" y="${Hh - 4}" class="axis" text-anchor="middle">${o.xlabel}</text>`;
+    if (o.ref) g += `<line x1="${l}" x2="${W - r}" y1="${Y(o.ref)}" y2="${Y(o.ref)}" class="ref"/><text x="${W - r}" y="${Y(o.ref) - 6}" class="axis" text-anchor="end">${o.refLabel}</text>`;
+    const pts = ys.map((v, i) => Number.isFinite(v) && v > 0 ? `${X(i)},${Y(Math.max(v, 10 ** lo))}` : null).filter(Boolean);
+    g += `<polyline points="${pts.join(" ")}" class="line"/>`;
+    ys.forEach((v, i) => { if (Number.isFinite(v) && v > 0) g += `<circle cx="${X(i)}" cy="${Y(Math.max(v, 10 ** lo))}" r="${i === o.mark ? 5.5 : 3}" class="${i === o.mark ? "dot-mark" : "dot"}"><title>${o.xlabel} ${i + (o.x0 ?? 0)}: ${v.toExponential(2)}</title></circle>`;
+      else g += `<text x="${X(i)}" y="${t + 10}" class="axis bad-t" text-anchor="middle">∞</text>`; });
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="${o.aria}">${g}</svg>`;
+  }
+  function renderSP2(L) {
+    logChart($("sp2"), L.sp.hist, { xlabel: "SP2 iteration", x0: 1, aria: "SP2 idempotency error per iteration", floor: 1e-16 });
+    $("sp2-note").textContent = `${L.sp.iters} matrix-product iterations in ${FE_NAME[L.inp.fe]}${L.sp.diverged ? "; diverged" : ""}. The curve flattens at the format’s noise floor; that floor, not the curve’s end, is what the refiner inherits.`;
+  }
+  function renderRefine(L) {
+    const ys = L.rf.steps.map(s => s.err);
+    logChart($("refine"), ys, { xlabel: "Ogita–Aishima step", x0: 0, ref: 1e-5, refLabel: "target 1e-5", mark: L.rf.reachedAt ?? -1, aria: "Sensitivity-map error per refinement step", floor: 1e-16 });
+    $("refine-note").textContent = L.ok
+      ? `Float64 refinement reached the target at step ${L.rf.reachedAt}. Start: range finder plus one Rayleigh–Ritz per block; each step is four dense matrix products.`
+      : "The start was outside the basin, so the refinement drifted. A cold start fails the same way; the front end’s job is to land the start inside the basin.";
+  }
+  function renderMap(L) {
+    if (!L.ok) { $("map").innerHTML = `<p class="muted">No map: the refinement did not converge.</p>`; return; }
+    const rows = L.rows, mx = Math.max(1e-12, ...rows.map(r => Math.abs(r.LA)), ...rows.map(r => Math.abs(r.LE)));
+    const W = 520, rowH = 20, l = 70, mid = l + (W - l - 20) / 2, half = (W - l - 20) / 2, Hh = rows.length * rowH + 40;
+    let g = `<line x1="${mid}" x2="${mid}" y1="8" y2="${Hh - 28}" class="axisline"/>`;
+    rows.forEach((r, i) => {
+      const y = 12 + i * rowH, w = half * Math.abs(r.LA) / mx, x = r.LA >= 0 ? mid : mid - w;
+      g += `<text x="${l - 8}" y="${y + 11}" class="axis" text-anchor="end">${esc(r.name)}</text>`;
+      g += `<rect x="${x}" y="${y}" width="${Math.max(w, 0.5)}" height="13" rx="2" class="bar ${r.LA >= 0 ? "pos" : "neg"}"><title>${esc(r.name)}: asynchronicity lever ${fmt(r.LA)}, interaction lever ${fmt(r.LE)}</title></rect>`;
+      const xe = mid + half * r.LE / mx;
+      g += `<line x1="${xe}" x2="${xe}" y1="${y - 1}" y2="${y + 14}" class="tick-e"><title>interaction lever ${fmt(r.LE)}</title></line>`;
+    });
+    g += `<text x="${mid - 6}" y="${Hh - 10}" class="axis" text-anchor="end">← wants donating</text><text x="${mid + 6}" y="${Hh - 10}" class="axis">wants withdrawing →</text>`;
+    $("map").innerHTML = `<svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="Per-atom levers">${g}</svg>`;
+    $("map-note").textContent = `Bars: asynchronicity lever dI/dδ (primary). Thin marks: interaction lever q(γ) − q(0). Current imbalance I = ${fmt(L.I)}; scale ±${mx.toFixed(4)}.`;
+  }
+  function renderTable(L) {
+    if (!L.ok) { $("table").innerHTML = ""; return; }
+    const rows = L.rows.slice().sort((a, b) => a.frag === b.frag ? a.rank - b.rank : (a.frag === "diene" ? -1 : 1));
+    $("table").innerHTML = `<table><thead><tr><th>Atom</th><th>Fragment</th><th class="num">Async. lever</th><th class="num">Interaction lever</th><th>Requirement</th><th>Reach</th><th class="num">Rank</th><th class="num">Sign stable</th></tr></thead><tbody>${
+      rows.map(r => `<tr><td><span class="sw ${r.sign > 0 ? "pos" : r.sign < 0 ? "neg" : ""}"></span>${esc(r.name)}</td><td>${r.frag}</td><td class="num">${fmt(r.LA)}</td><td class="num">${fmt(r.LE)}</td><td>${esc(r.env)}</td><td>${r.reach}</td><td class="num">${r.rank}</td><td class="num">${(100 * r.robust).toFixed(0)}%</td></tr>`).join("")
+    }</tbody></table>`;
+  }
+  function reportText(L) {
+    const i = L.inp, a = i.analog;
+    const fe = i.fe === "analog" ? `${FE_NAME.analog}: 8-bit weights, 8-bit duty, ${a.adcBits}-bit ADC (${a.fitted ? "fitted" : "worst-case"} range), gain σ ${(100 * a.gain).toFixed(2)}%, offset ${a.offset}, noise ${a.noise} of full scale, chip ${a.seed}` : FE_NAME[i.fe];
+    const molName = i.molecule === "chain" ? `extended chain (diene ${$("ld").value} atoms, dienophile ${$("le").value} atoms${$("endo").checked ? ", ends in C=O" : ""})` : i.molecule;
+    let s = `# Catalyst requirement report\n\nPair: ${molName}\nCoupling at forming bonds: γ = ${i.gamma.toFixed(2)}|β|; h_O = ${i.hO.toFixed(2)}; bond set: ${i.kset}\n`;
+    s += `Size: ${L.spec.atoms.length} π centres, ${L.no} occupied orbitals, HOMO–LUMO gap ${L.gap.toFixed(3)}|β|\n`;
+    s += `Front end: ${fe}; SP2 iterations: ${L.sp.iters}${L.sp.diverged ? " (diverged)" : ""}\n`;
+    s += `Refinement: ${L.ok ? `reached map error ≤ 1e-5 at Ogita–Aishima step ${L.rf.reachedAt}` : "did not converge (start outside the basin)"}\n\n`;
+    if (!L.ok) return s + "No catalyst profile: the front end was not precise enough for this molecule.\n";
+    const sel = E.summary(L.rows, 2);
+    s += `## Ideal catalyst profile\n\n`;
+    if (!sel.length) s += "No electrostatic lever at this level of theory.\n";
+    sel.forEach((r, n) => { s += `${n + 1}. ${r.frag}, ${r.name}: ${r.env} [${r.reach}]; lever ${fmt(r.LA)}; sign stable in ${(100 * r.robust).toFixed(0)}% of parameter variants${r.alsoBind ? "; also strengthens the reactant interaction" : ""}\n`; });
+    s += `\n## Per-atom levers\n\n| Atom | Fragment | Async. lever | Interaction lever | Requirement | Sign stable |\n|---|---|---|---|---|---|\n`;
+    L.rows.forEach(r => { s += `| ${r.name} | ${r.frag} | ${fmt(r.LA)} | ${fmt(r.LE)} | ${r.env} | ${(100 * r.robust).toFixed(0)}% |\n`; });
+    s += `\nMethod: simple Hückel supermolecule; asynchronicity lever dI/dδ (primary, after DFT work linking Lewis-acid catalysis to asynchronicity and reduced Pauli repulsion); interaction lever q(γ) − q(0). Heuristic only: no σ framework, sterics, solvent, geometry or Pauli repulsion.\n`;
+    return s;
+  }
+  function renderReport(L) { $("report").value = reportText(L); }
+  function reportJSON(L) {
+    return JSON.stringify({ inputs: L.inp, converged: L.ok, reachedAt: L.rf.reachedAt, sp2Iterations: L.sp.iters, gap: L.gap,
+      imbalance: L.I, rows: L.rows }, (k, v) => (k === "spec" ? undefined : (typeof v === "number" ? +v.toPrecision(6) : v)), 2);
+  }
+  async function copy(text, btn) {
+    const orig = btn.textContent;
+    try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; }
+    catch (e) { const ta = $("report"); ta.value = text; ta.focus(); ta.select(); btn.textContent = "Selected: press Ctrl+C"; }
+    setTimeout(() => { btn.textContent = orig; }, 1800);
+  }
+
+  // ---------- wiring ----------
+  let timer = null;
+  function schedule() { syncLabels(); clearTimeout(timer); timer = setTimeout(run, 60); }
+  document.querySelectorAll("#controls input, #controls select").forEach(el => el.addEventListener("input", schedule));
+  $("copy-md").addEventListener("click", e => copy(reportText(state.last), e.currentTarget));
+  $("copy-json").addEventListener("click", e => copy(reportJSON(state.last), e.currentTarget));
+  run();
+})();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catalyst Requirement Pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* Plan: a bench instrument read-out. Cool blue-grey paper, ink-navy text; the two orbital-phase colours
+   (teal = wants electron-withdrawing, vermilion = wants electron-donating) are the only strong hues.
+   Layout: controls column on the left, result first on the right, then the six numbered pipeline stages. */
+:root {
+  --paper: #eef2f5; --panel: #ffffff; --ink: #14202c; --muted: #5a6877; --rule: #d3dbe3;
+  --accent: #2456a4; --pos: #0e7f7a; --neg: #c4472d; --amber: #c98a12;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f161d; --panel: #16202a; --ink: #e3eaf0; --muted: #93a3b3; --rule: #2a3744;
+    --accent: #7aa7ec; --pos: #3cc2b9; --neg: #f07a5e; --amber: #e9b04a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0f161d; --panel: #16202a; --ink: #e3eaf0; --muted: #93a3b3; --rule: #2a3744;
+  --accent: #7aa7ec; --pos: #3cc2b9; --neg: #f07a5e; --amber: #e9b04a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.5 var(--body); }
+header { padding: 28px 24px 8px; max-width: 1280px; margin: 0 auto; display: grid; gap: 6px; }
+h1 { font: 700 clamp(26px, 3.4vw, 38px)/1.05 var(--display); letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+header p { margin: 0; color: var(--muted); max-width: 72ch; }
+main { max-width: 1280px; margin: 0 auto; padding: 16px 24px 48px; display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 18px; }
+#controls { position: sticky; top: 12px; display: grid; gap: 14px; }
+@media (max-width: 860px) { #controls { position: static; } }
+fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 10px; }
+legend { font: 600 12px/1 var(--body); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 8px; }
+label { display: grid; gap: 4px; font-size: 13.5px; }
+.row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.val { font: 500 12.5px var(--mono); color: var(--accent); font-variant-numeric: tabular-nums; }
+select, input[type="number"] { font: inherit; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; background: var(--paper); color: var(--ink); }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.seg label { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--rule); border-radius: 6px; cursor: pointer; font-size: 13px; }
+.seg label:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.seg input { accent-color: var(--accent); margin: 0; }
+.check { display: flex; align-items: center; gap: 8px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sub { display: grid; gap: 10px; padding-left: 10px; border-left: 2px solid var(--rule); }
+.hint { font-size: 12.5px; color: var(--muted); margin: 0; }
+#out { display: grid; gap: 20px; }
+.result h2 { font: 700 22px/1.2 var(--display); margin: 0 0 6px; }
+.result-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.pill { font: 600 12.5px var(--body); padding: 4px 10px; border-radius: 999px; }
+.pill.good { background: color-mix(in srgb, var(--pos) 16%, transparent); color: var(--pos); }
+.pill.bad { background: color-mix(in srgb, var(--neg) 16%, transparent); color: var(--neg); }
+#meta { font: 12.5px var(--mono); color: var(--muted); margin: 6px 0 12px; }
+#reqs { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.req { display: grid; grid-template-columns: 110px minmax(0, 1fr) 190px; gap: 12px; align-items: start; padding: 10px 12px; border-radius: 8px; border-left: 4px solid; background: var(--paper); }
+.req.pos { border-color: var(--pos); } .req.neg { border-color: var(--neg); }
+.req span { display: grid; gap: 2px; } .req small { color: var(--muted); font-size: 12px; font-family: var(--body); }
+.req-site { font: 600 16px var(--mono); } .req-what { font-weight: 600; }
+.req-num { font: 500 14px var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) { .req { grid-template-columns: 1fr; } .req-num { text-align: left; } }
+.warn { color: var(--neg); margin: 0; } .muted { color: var(--muted); margin: 0; }
+.stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 20px; }
+@media (max-width: 520px) { .stages { grid-template-columns: 1fr; } }
+.stage h3 { font: 700 16px/1.2 var(--display); margin: 0 0 2px; display: flex; gap: 10px; align-items: baseline; }
+.stage h3 b { font: 500 12px var(--mono); color: var(--accent); }
+.stage .what { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
+.fig { overflow-x: auto; } .fig svg { width: 100%; height: auto; display: block; }
+.note { font-size: 12.5px; color: var(--muted); margin: 8px 0 0; }
+.wide { grid-column: 1 / -1; }
+svg text { font-family: var(--mono); }
+.bond { stroke: var(--ink); stroke-width: 2; } .bond.thin { stroke-width: 1.2; opacity: 0.6; }
+.forming { stroke: var(--amber); stroke-width: 2; stroke-dasharray: 5 4; }
+.atom { fill: var(--panel); stroke: var(--ink); stroke-width: 1.5; } .atom.hetero { stroke: var(--neg); stroke-width: 2; }
+.atom-label { font-size: 10.5px; text-anchor: middle; fill: var(--ink); font-weight: 500; }
+.halo.pos { fill: var(--pos); fill-opacity: 0.28; } .halo.neg { fill: var(--neg); fill-opacity: 0.28; }
+.cell { fill: var(--accent); } .cellf { fill: var(--amber); stroke: var(--amber); stroke-width: 1.5; } .cell0 { fill: var(--paper); }
+.axis { font-size: 10.5px; fill: var(--muted); } .bad-t { fill: var(--neg); }
+.grid { stroke: var(--rule); stroke-width: 1; } .axisline { stroke: var(--muted); stroke-width: 1; }
+.ref { stroke: var(--amber); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.line { fill: none; stroke: var(--accent); stroke-width: 2; } .dot { fill: var(--accent); } .dot-mark { fill: var(--pos); stroke: var(--panel); stroke-width: 2; }
+.bar.pos { fill: var(--pos); } .bar.neg { fill: var(--neg); } .tick-e { stroke: var(--ink); stroke-width: 2; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--rule); }
+.sw.pos { background: var(--pos); } .sw.neg { background: var(--neg); }
+textarea { width: 100%; min-height: 220px; font: 12.5px/1.45 var(--mono); padding: 10px; border: 1px solid var(--rule); border-radius: 8px; background: var(--paper); color: var(--ink); resize: vertical; }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 0; }
+button { font: 600 13px var(--body); padding: 8px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--panel); cursor: pointer; }
+button.ghost { background: transparent; color: var(--accent); }
+footer { max-width: 1280px; margin: 0 auto; padding: 0 24px 40px; color: var(--muted); font-size: 12.5px; }
+footer p { max-width: 90ch; margin: 0 0 6px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Catalyst requirement pipeline</h1>
+  <p>Pick a diene and dienophile. The pipeline builds their Hückel matrix, runs a low-precision or analog front end, refines the result exactly, and reports what an ideal catalyst environment would need at each atom.</p>
+</header>
+<main>
+  <form id="controls" class="panel" onsubmit="return false">
+    <fieldset>
+      <legend>Molecule</legend>
+      <label for="molecule">Reaction pair
+        <select id="molecule">
+          <option value="butadiene + acrolein" selected>Butadiene + acrolein</option>
+          <option value="butadiene + ethylene">Butadiene + ethylene (control)</option>
+          <option value="2-methoxybutadiene + acrolein">2-Methoxybutadiene + acrolein</option>
+          <option value="chain">Extended chain (size study)</option>
+        </select>
+      </label>
+      <div id="chain-opts" class="sub" hidden>
+        <label for="ld"><span class="row">Diene length <span class="val" id="ld-v"></span></span><input id="ld" type="range" min="4" max="20" step="2" value="12"></label>
+        <label for="le"><span class="row">Dienophile length <span class="val" id="le-v"></span></span><input id="le" type="range" min="2" max="20" step="1" value="12"></label>
+        <label class="check" for="endo"><input id="endo" type="checkbox" checked> Dienophile ends in C=O</label>
+      </div>
+      <label for="gamma"><span class="row">Coupling γ at forming bonds <span class="val" id="gamma-v"></span></span><input id="gamma" type="range" min="0.05" max="1" step="0.05" value="0.3"></label>
+      <label for="ho" id="ho-row"><span class="row"><span>Carbonyl O parameter h<sub>O</sub></span> <span class="val" id="ho-v"></span></span><input id="ho" type="range" min="0.5" max="2" step="0.25" value="1"></label>
+      <label for="kset">Bond parameters
+        <select id="kset"><option value="std" selected>All k = 1 (standard)</option><option value="2312">C=C 1.1, C–C 0.9</option></select>
+      </label>
+    </fieldset>
+    <fieldset>
+      <legend>Front end</legend>
+      <div class="seg">
+        <label><input type="radio" name="fe" value="fp64"> float64</label>
+        <label><input type="radio" name="fe" value="fp32"> float32</label>
+        <label><input type="radio" name="fe" value="fp16pair"> FP16-pair</label>
+        <label><input type="radio" name="fe" value="int8"> INT8</label>
+        <label style="grid-column: 1 / -1"><input type="radio" name="fe" value="analog" checked> Analog array (behavioral)</label>
+      </div>
+      <div id="analog-opts" class="sub">
+        <label for="adc"><span class="row">ADC resolution <span class="val" id="adc-v"></span></span><input id="adc" type="range" min="8" max="16" step="1" value="12"></label>
+        <label for="range">ADC range
+          <select id="range"><option value="fitted" selected>Fitted to each product</option><option value="worst">Worst-case column sum</option></select>
+        </label>
+        <label for="gain"><span class="row">Per-cell gain error σ <span class="val" id="gain-v"></span></span><input id="gain" type="range" min="0" max="5" step="0.06" value="0.12"></label>
+        <label for="offset"><span class="row">Column offset (of full scale) <span class="val" id="offset-v"></span></span><input id="offset" type="range" min="0" max="0.01" step="0.0001" value="0.0001"></label>
+        <label for="noise"><span class="row">Read noise (of full scale) <span class="val" id="noise-v"></span></span><input id="noise" type="range" min="0" max="0.003" step="0.00005" value="0.0001"></label>
+        <label for="chip">Simulated chip <input id="chip" type="number" min="0" max="9999" value="1"></label>
+        <p class="hint">Weights and duty cycles are 8-bit. Offset and noise levels are placeholders; only the gain figures come from measured MolMAC/VoltMatrix numbers.</p>
+      </div>
+      <label for="rseed">Refinement start (random seed) <input id="rseed" type="number" min="0" max="9999" value="7"></label>
+    </fieldset>
+  </form>
+
+  <div id="out">
+    <section class="panel result" aria-live="polite">
+      <div class="result-head"><h2>Ideal catalyst profile</h2><span id="status" class="pill"></span></div>
+      <div id="meta"></div>
+      <ol id="reqs"></ol>
+    </section>
+
+    <div class="stages">
+      <section class="panel stage">
+        <h3><b>01</b>Molecule</h3>
+        <p class="what">Diene (top, s-cis) over dienophile; dashed amber lines are the two bonds that form.</p>
+        <div class="fig" id="mol"></div><p class="note" id="mol-note"></p>
+      </section>
+      <section class="panel stage">
+        <h3><b>02</b>Hückel matrix H(γ)</h3>
+        <p class="what">π-electron model of the pair at a transition-state-like coupling γ.</p>
+        <div class="fig" id="matrix"></div><p class="note" id="matrix-note"></p>
+      </section>
+      <section class="panel stage">
+        <h3><b>03</b>Front end: SP2 purification</h3>
+        <p class="what">Matrix products only, in the selected precision. Output: the occupied-orbital projector.</p>
+        <div class="fig" id="sp2"></div><p class="note" id="sp2-note"></p>
+      </section>
+      <section class="panel stage">
+        <h3><b>04</b>Exact refinement</h3>
+        <p class="what">Ogita–Aishima steps in float64. Converges only if the front end landed inside the basin.</p>
+        <div class="fig" id="refine"></div><p class="note" id="refine-note"></p>
+      </section>
+      <section class="panel stage">
+        <h3><b>05</b>Sensitivity map</h3>
+        <p class="what">How an environment at each atom shifts the forming-bond imbalance (asynchronicity).</p>
+        <div class="fig" id="map"></div><p class="note" id="map-note"></p>
+      </section>
+      <section class="panel stage">
+        <h3><b>06</b>Catalyst report</h3>
+        <p class="what">Plain-text report of this run, ready to paste into notes.</p>
+        <textarea id="report" aria-label="Report" readonly></textarea>
+        <div class="btns"><button id="copy-md" type="button">Copy report</button><button id="copy-json" type="button" class="ghost">Copy as JSON</button></div>
+      </section>
+      <section class="panel stage wide">
+        <h3><b>06a</b>Rule table, every atom</h3>
+        <p class="what">Rank is within each fragment by the asynchronicity lever. “Sign stable” is the share of parameter variants (h<sub>O</sub>, bond set, γ) that give the same requirement.</p>
+        <div class="fig" id="table"></div>
+      </section>
+    </div>
+  </div>
+</main>
+<footer>
+  <p>Model limits: simple Hückel theory has no σ framework, sterics, solvent, geometry or Pauli repulsion. The requirements are a labelled heuristic, checked against known chemistry in three ways: Lewis-acid and H-bond catalysis at the carbonyl oxygen comes out as “withdrawing”, the all-carbon pair gives no lever, and an ether oxygen on the diene comes out as “donating”.</p>
+  <p>The analog front end is a behavioral simulation, not hardware. In this design it cannot save energy: the exact refinement alone costs about as much as diagonalizing H directly.</p>
+</footer>
+<script>
+/*ENGINE*/
+</script>
+<script>
+/*APP*/
+</script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-# Catalyst Precision (MolMAC branch `catalyst-precision`)
+# Catalyst Precision (MolMAC branch `cataline`)
 
 **How much numerical precision does a cheap or analog chip need to help design catalysts?**
 

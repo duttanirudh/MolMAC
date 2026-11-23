@@ -1,0 +1,523 @@
+\documentclass[11pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,tabularx,array}
+\usepackage{pifont}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\ok}{\ding{51}}
+\newcommand{\no}{\ding{55}}
+\newcommand{\partly}{$\sim$}
+\newcommand{\x}{$\times$}
+\newcommand{\V}{\textbf{[V]}}
+\newcommand{\Hh}{\textbf{[H]}}
+\newcommand{\OPEN}{\textbf{[OPEN]}}
+\newcommand{\scr}[1]{\texttt{#1}}
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+\setlist{itemsep=2pt,topsep=4pt}
+\emergencystretch=3em
+
+\title{Technical note: catalyst-requirement pipeline under low-precision / analog arithmetic}
+\author{}
+\date{Draft v2, 2026-11-23. Repository branch \scr{cataline}, folder \scr{catalyst/}.}
+
+\begin{document}
+\maketitle
+
+\subsection*{Status tags}
+\begin{itemize}
+  \item \V{} reproduced from a script log (or read directly from script source) in the laptop run of 2026-11-23.
+  \item \Hh{} taken from the project handoff; not re-checked.
+  \item \OPEN{} not yet checked, unexplained, or a known gap.
+\end{itemize}
+
+Environment of all \V{} runs: home laptop, Windows, venv \scr{cataline}; Python 3.15.2, numpy 2.5.5, scipy 1.18.1, pandas 3.1.1, scikit-learn 1.9.1, biopython 1.88. \scr{bits2.py} run twice gave identical output apart from the runtime line (deterministic on one machine). Earlier workstation runs have not been compared. \OPEN
+
+%=====================================================================
+\section{Scope and claims}
+
+A H\"uckel pi-electron model of a diene/dienophile pair is solved by a low-precision or analog front end (SP2 density-matrix purification) followed by an exact float64 refinement. The pipeline reports (a) a precision budget for the front end and (b) a per-atom table of the catalyst environment that would be required. All hardware is simulated.
+
+Claims supported by the logs:
+\begin{enumerate}
+  \item A products-only refiner cannot start cold; a low-precision front end plus one Rayleigh-Ritz per block is needed. (\ref{sec:cold}, \ref{sec:oa})
+  \item Required precision rises with system size, up to the sizes tested. The numbers are less regular than the handoff suggested (\ref{sec:scale}).
+  \item Read noise is the dominant error source, and its tolerance depends strongly on how noise is assumed to scale with $N$ (\ref{sec:bits}).
+  \item At 8 atoms, every simulated front end reaches 95\% at least one refinement step before a cold start does, as a lower bound (\ref{sec:cold}).
+  \item Finite-difference sensitivity (R3) is unusable on noisy analog arithmetic (\ref{sec:budget}).
+\end{enumerate}
+
+Not claimed: section~\ref{sec:notclaimed}.
+
+%=====================================================================
+\section{Model}
+
+\begin{itemize}
+  \item Units of $|\beta|$, $\alpha_\mathrm{C} = 0$, $H_{ii} = -h_i$, $H_{ij} = -k_{ij}$; forming bonds carry coupling $\gamma$; the catalyst stand-in lowers one atom's on-site energy by $\delta$ (\scr{H[k,k] -= delta}). [V from \scr{h1\_acrolein.py}, \scr{rules.py} source]
+  \item Systems: butadiene + ethylene; butadiene + acrolein (8 atoms, $N_\mathrm{OCC} = 4$); 2-methoxybutadiene + acrolein; a polyene/polyenal family for scaling ($N = 8$--64; $N = 8$ reproduces butadiene + acrolein). Hetero-atom parameters: $h_\mathrm{O} = 1$ (carbonyl, ``sourced''), $h_\mathrm{OR} = 2$ and C-O(ether) $k = 0.8$ (the latter ``from memory'' per \scr{rules.py}).
+  \item Observable: $I = p(\mathrm{C1{-}Cb}) - p(\mathrm{C4{-}Ca}) = \mathrm{Tr}(A D)$. $A = |I|/(p_1 + p_2)$ only where $p_1 + p_2 \geq 0.3$ (printed \scr{nan} at $\gamma = 0.1$). \V
+  \item Exact check, butadiene + ethylene \V: $E_\pi$ 6.472136 at $\gamma = 0$ and 8.000000 at $\gamma = 1$; interaction energy 1.527864 at $\gamma = 1$; charges 1 and same-sublattice bond orders 0 to $\sim$1e-15; HOMO-LUMO gap 1.2361 to 2.0000.
+\end{itemize}
+
+%=====================================================================
+\section{Algorithms}
+
+\begin{itemize}
+  \item \textbf{SP2} (trace-correcting, Gershgorin bounds computed digitally, stall rule or fixed cap, divergence guard). Versus \scr{eigh} for butadiene + ethylene \V: density-matrix error $\leq$ 1.4e-15, 16--19 iterations.
+  \item \textbf{Sensitivity routes.} R1 direct perturbation; R2 adjoint (dual) pass; R3 central finite differences. Hellmann-Feynman and polarizability agree with finite differences to $\sim$1e-10 \V.
+  \item \textbf{Refinement (\scr{refine.py}).} Range finder ($P$ times seeded Gaussian, QR), Rayleigh-Ritz per block, first-order occupied-virtual correction, aufbau swap check. At $8 \times 8$ this is effectively a full eigensolver, so benefit is measured against a cold-start control. The default range-finder matrix uses seed 7; per-run seeds are used where stated.
+  \item \textbf{Ogita-Aishima (\scr{s2\_oa.py}).} Start: range finder, then one Rayleigh-Ritz per block (the only diagonalizations); then products-only steps $X \leftarrow X(I + E)$ in float64. Success: map relative error $\leq$ 1e-5 within 10 steps.
+\end{itemize}
+
+%=====================================================================
+\section{Analog behavioral model [V from \scr{analog\_mc.py}, \scr{mc\_budget.py} source]}
+
+Product $Y = A B$: $B$ programmed as weights (8-bit signed, per-matrix scale) with static per-cell gain $1 + \sigma_g N(0,1)$; rows of $A$ applied as 8-bit duty cycles, positive and negative parts in two passes; column sums read with a static column offset and fresh Gaussian read noise (both fractions of column full scale $\mathrm{FS}_j = \sum_i |W_{ij}|$), then a $b$-bit ADC.
+
+\textbf{Parameter status (stated in the script headers):} gain 1.7\% is the ``measured MolMAC/VoltMatrix-scale'' figure and 0.12\% the ``MolMAC oracle-calibrated'' figure. \textbf{All offset and noise levels are placeholders, not sourced.} The budgets below are therefore requirements (``how much error can be tolerated''), not predictions about any real chip.
+
+\scr{analog\_mc.py} modes (quantization, $\sigma_g$, $\sigma_o$, offset mode, $\sigma_n$):
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lllLl@{}}
+\toprule
+Mode & Quantized & gain & offset & noise \\
+\midrule
+IDEAL & no & 0 & 0 & 0 \\
+Q8 & yes & 0 & 0 & 0 \\
+G\_cal / G\_unc & no & 0.12\% / 1.7\% & 0 & 0 \\
+O\_same / O\_split & no & 0 & 1e-2 (same in both passes / separate per pass) & 0 \\
+N1 / N10 & no & 0 & 0 & 1e-3 / 1e-2 \\
+ALL\_cal & yes & 0.12\% & 2e-3 split & 2e-3 \\
+ALL\_unc & yes & 1.7\% & 1e-2 split & 1e-2 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+``ALL'' in \scr{mc\_budget.py} is a different combination: gain 0.12\% (cal) or 1.7\% (uncal) with offset 1e-3 and noise 1e-3, 8-bit weights and duty, 12-bit auto-ranged ADC.
+
+%=====================================================================
+\section{Experimental design [V from source]}
+
+\begin{itemize}
+  \item Seeds: chip $c$ uses static seed $1000 + c$ (\scr{analog\_mc}, \scr{mc\_budget}), noise seed $5000 + c$ (\scr{mc\_budget}) or seed $+ 10^6$ (\scr{analog\_mc}), range-finder seed = chip index (\scr{seed\_sweep}, \scr{mc\_budget}).
+  \item \scr{analog\_mc.py}, \scr{seed\_sweep.py}: 200 chips \x{} 18 settings = 3,600 runs per stochastic row (sign-failure denominators 28,800 = 3,600 \x{} 8 atoms). Settings: 2 bond sets \x{} $h_\mathrm{O} \in \{0.5, 1, 2\}$ \x{} $\gamma \in \{0.1, 0.3, 0.5\}$.
+  \item \scr{mc\_budget.py}, \scr{robust.py}: 200 chips \x{} 6 settings = 1,200 runs per cell ($h_\mathrm{O} = 1$).
+  \item \scr{bits.py}, \scr{bits2.py}, \scr{s2\_oa.py}, \scr{no\_rr.py}: \textbf{60 runs per cell} (6 settings \x{} 10 range-finder seeds), so one run = 1.7 percentage points and the standard error near 95\% is about 0.03. A difference of one grid step in ``minimum bits'' (2 bits) is within noise for most cells.
+  \item \scr{scale.py}: 6 settings per $N$, 10 range-finder seeds; reports median [min--max] steps until all settings pass.
+  \item Rows starred in \scr{analog\_mc} part 1 (COLD, IDEAL, Q8, O\_same) are deterministic across chips: effective $n = 18$ settings, and they use the single default range-finder seed. They are not used for step-saving claims.
+\end{itemize}
+
+%=====================================================================
+\section{Results}
+
+\subsection{Cold start versus front end, 8 atoms (\scr{seed\_sweep.py}) [V]}\label{sec:cold}
+
+Fraction reaching target after $k$ refinement steps; $n = 3{,}600$ per row.
+
+\begin{center}
+\begin{tabular}{lcccccccc}
+\toprule
+Mode & $k=0$ & 1 & 2 & 3 & 4 & 5 & 6 & $k_{95}$ \\
+\midrule
+COLD & .000 & .000 & .010 & .398 & .720 & .862 & .925 & none \\
+IDEAL & .596 & 1.00 & 1.00 & 1.00 & 1.00 & 1.00 & 1.00 & 1 \\
+Q8 & .000 & .000 & .766 & .922 & .961 & .976 & .989 & 4 \\
+G\_cal & .000 & .964 & .999 & 1.00 & 1.00 & 1.00 & 1.00 & 1 \\
+G\_unc & .000 & .344 & .964 & .990 & .997 & .999 & .999 & 2 \\
+O\_same & .536 & 1.00 & 1.00 & 1.00 & 1.00 & 1.00 & 1.00 & 1 \\
+O\_split & .000 & .028 & .828 & .944 & .974 & .986 & .994 & 4 \\
+N1 & .000 & .001 & .889 & .969 & .986 & .993 & .995 & 3 \\
+N10 & .000 & .000 & .198 & .735 & .878 & .940 & .967 & 6 \\
+ALL\_cal & .000 & .000 & .719 & .920 & .962 & .980 & .988 & 4 \\
+ALL\_unc & .000 & .000 & .175 & .711 & .867 & .929 & .960 & 6 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The cold start never reaches 95\% by $k = 6$, so ``steps saved'' is undefined in the log; every front end reaching 95\% by $k = 6$ gives ``at least one step''. For N10 and ALL\_unc the margin at $k = 6$ is small (0.967 and 0.960 against 0.925).
+
+\subsection{Scale-up: steps saved and break-even (\scr{scale.py}) [V]}\label{sec:scale}
+
+Median [min--max over 10 seeds] steps until all 6 settings reach 1e-5 (99 = not by $k = 12$), and steps saved against COLD; ``be'' is the factor by which the front end's MAC must be cheaper than a refinement-step MAC to pay for itself.
+
+\begin{center}
+\small
+\small
+\begin{tabular}{lccccc}
+\toprule
+$N$ (gap) & COLD & FP16PAIR (saved, be) & INT8 & AN8 & AN10 \\
+\midrule
+8 (0.970) & 4 [3--99] & 1 (+3, 2.1\x) & 2 (+2, 2.5\x) & 3 [2--6] (+1, 10.2\x) & 2 [2--99] (+2, 5.5\x) \\
+16 (0.532) & 7 [5--9] & 1 (+6, 1.2\x) & 2 (+5, 1.1\x) & 3 (+4, 2.7\x) & 2 (+5, 2.3\x) \\
+24 (0.363) & 6 [4--11] & 1 (+5, 1.5\x) & 2 (+4, 1.5\x) & 5 (+1, 12.4\x) & 3 (+3, 4.4\x) \\
+32 (0.270) & 6 [5--12] & 1 (+5, 1.6\x) & 3 (+3, 2.1\x) & 5 [3--99] (+1, 12.4\x) & 4 (+2, 6.5\x) \\
+40 (0.215) & 6 [5--9] & 1 (+5, 1.7\x) & 4 (+2, 3.6\x) & 6 (+0, never) & 3 (+3, 4.6\x) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+($N = 12$ omitted for space.) AN8 and AN10 are noise-free analog chains (8-bit weights/duty, 8- or 10-bit ADC). The MAC counts exclude the two $N/2 \times N/2$ block diagonalizations per refinement step (stated in the log), so break-even here is not a full energy accounting.
+
+\subsection{Ogita-Aishima start (\scr{s2\_oa.py}, \scr{no\_rr.py}) [V]}\label{sec:oa}
+
+Success over 60 runs ($\delta_1 = $ 1e-10; the $\delta_1 = $ 1e-3 table is identical in every cell, see section~\ref{sec:prereg}):
+
+\begin{center}
+\begin{tabular}{lccccc}
+\toprule
+$N$ & COLD & FP16PAIR & INT8 & AN8 & AN10 \\
+\midrule
+8 & .05 & 1.00 & 1.00 & .90 & .93 \\
+16 & .00 & 1.00 & 1.00 & .67 & .88 \\
+24 & .00 & 1.00 & 1.00 & .33 & .70 \\
+32 & .00 & 1.00 & .87 & .18 & .57 \\
+40 & .00 & 1.00 & .77 & .03 & .43 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Without the Rayleigh-Ritz (\scr{no\_rr.py}, up to 30 steps): NONE gives 0.00 in every case (also with cluster threshold 0.1); block power iteration (POWER, $m = 20$) gives 0.60 at $N = 8$ and $\sim$0 at $N \geq 16$ (FP16PAIR: 0.03 at $N = 16$, 0.00 at 24 and 40). One Rayleigh-Ritz per block is needed.
+
+\subsection{Required precision against $N$ (\scr{bits.py}, \scr{bits2.py}) [V]; $n = 60$ per cell}\label{sec:bits}
+
+Minimum bits for $\geq$ 95\% success. HOMO-LUMO gap: $N = 8$: 0.970; 16: 0.532; 24: 0.363; 32: 0.270; 40: 0.215; 48: 0.178; 56: 0.153; 64: 0.133.
+
+\begin{center}
+\small
+\begin{tabular}{lcccc}
+\toprule
+$N$ & Digital INT$b$ & ideal (oracle ADC range) & worst-case range & pga (power-of-two auto-range) \\
+\midrule
+8 & 8 & 10 & 10 & 10 \\
+16 & 8 & 10 & 14 & 14 \\
+24 & 8 & 14 & 14 & 14 \\
+32 & 10 & 12 & 14 & 14 \\
+40 & 10 & 12 & 16 & 16 \\
+48 & 10 & 14 & not run & 16 \\
+56 & 10 & none (.80 at 14, .67 at 16) & not run & 16 \\
+64 & 12 & 14 (.97 at 14, .58 at 16) & not run & 16 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Reading: the digital requirement rises from 8 to 12 bits; the analog requirement rises faster and irregularly. pga equals worst-case for $N \leq 40$ (it did not change the result), so power-of-two ranging recovered nothing in this model. At $N = 56$ and 64 the ideal-range success rate falls when going from 14 to 16 bits (0.97 $\to$ 0.58 at $N = 64$: a difference far larger than the $n = 60$ noise); the cause is unexplained \OPEN, and the $N \geq 48$ results should not be used to state a trend. The worst-case range was run only up to $N = 40$ (\scr{bits2.py} skips it above).
+
+Variants in \scr{bits.py} (8-bit weights/duty, ADC $b$ bits): W8D8-worst min bits $N = 8/16/24/32/40$: 10/14/14/14/16; W8D8-fit: 10/10/14/12/12; ALLb-fit (all $b$ bits): 10/12/12/12/14; INT$b$: 8/8/8/10/10.
+
+\subsection{Error budget at 8-bit weights (\scr{mc\_budget.py}, \scr{robust.py}) [V]}\label{sec:budget}
+
+Success fraction ($n = 1{,}200$ per cell; s.e.\ 0.002--0.014); 12-bit auto-ranged ADC; \texttt{*} = $\geq$ 0.95.
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Cell & $N = 8$ & $N = 24$ & $N = 40$ \\
+\midrule
+none & .996* & .962* & .886 \\
+gain 0.12\% & .996* & .977* & .942 \\
+gain 0.5\% & .995* & .956* & .938 \\
+gain 1.7\% & .995* & .932 & .869 \\
+gain 5\% & .956* & .769 & .632 \\
+offset 1e-4 & .994* & .962* & .943 \\
+offset 1e-3 & .994* & .956* & .922 \\
+offset 1e-2 & .913 & .584 & .111 \\
+noise 1e-4 & .992* & .928 & .838 \\
+noise 1e-3 & .939 & .600 & .210 \\
+noise 1e-2 & .586 & .000 & .000 \\
+ALL cal & .951* & .568 & .211 \\
+ALL uncal & .950* & .547 & .233 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Noise-scaling and ADC-width robustness (\scr{robust.py}, 14-bit ADC unless stated; noise = $s_n \times \mathrm{FS}_j \times f(N)$, with $f = 1$ (``N''), $\sqrt{8/N}$ (``sqrtN''), $8/N$ (``fixed''), identical at $N = 8$):
+
+\begin{center}
+\small
+\begin{tabular}{lccc}
+\toprule
+Cell & $N = 8$ & $N = 24$ & $N = 40$ \\
+\midrule
+ADC12, no error & .996* & .962* & .886 \\
+ADC14, no error & .996* & .998* & .959* \\
+N, 1e-4 / 3e-4 / 1e-3 & .988* / .978* / .955* & .934 / .830 / .563 & .842 / .612 / .211 \\
+sqrtN, 1e-4 / 3e-4 / 1e-3 & same as N & .955* / .889 / .731 & .917 / .797 / .477 \\
+fixed, 1e-4 / 3e-4 / 1e-3 & same as N & .976* / .934 / .818 & .952* / .898 / .721 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Reading:
+\begin{itemize}
+  \item Gain tolerance: about 5\% at 8 atoms; about 0.5\% at 24 (1.7\% fails).
+  \item Noise tolerance (grid 1e-4, 3e-4, 1e-3): at $N = 8$ at least 1e-3 with a 14-bit ADC (0.955), but only just below the line with a 12-bit ADC (0.939). At $N = 24$ and 40 it is below 3e-4 under every scaling model; it is below 1e-4 under the ``N'' model and between 1e-4 and 3e-4 under ``fixed'' ($N = 24$ and 40) and ``sqrtN'' ($N = 24$ only). So the tolerance falls by at least 3.3\x{} from $N = 8$ to $N = 24$ under every model, and the exact $N$-trend depends on the (unknown) physical scaling.
+  \item Offset tolerance: between 1e-3 and 1e-2 at $N = 8$ and 24 (12-bit ADC).
+  \item Individually acceptable errors do not compose at $N = 24$ (ALL: 0.568).
+  \item At $N = 40$ the unperturbed 12-bit chain already fails (0.886); with a 14-bit ADC it passes (0.959). Small perturbations improve the 12-bit result (gain 0.12\%: 0.942; offset 1e-4: 0.943). A plausible explanation is that random perturbation dithers a deterministic quantization error; this is a hypothesis, not tested. \OPEN
+\end{itemize}
+
+\subsection{Refined pipeline, R3 and iteration cap (\scr{analog\_mc.py}) [V]}
+
+Part 1, stochastic modes ($n = 3{,}600$): reaching target at $k = 3$ / $k = 5$, and sign failures at $k = 3$ (of 28,800).
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Mode & $k=3$ & $k=5$ & Sign failures \\
+\midrule
+G\_cal & 1.000 & 1.000 & 0 \\
+G\_unc & .988 & .999 & 35 \\
+O\_split & .928 & .984 & 355 \\
+N1 & .967 & .994 & 129 \\
+N10 & .635 & .917 & 1,675 \\
+ALL\_cal & .847 & .965 & 750 \\
+ALL\_unc & .617 & .912 & 1,723 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Part 2 (R3 on the analog solver, no refinement, $h = 0.03$; median / 90th percentile map error): IDEAL 3.4e-4 / 5.1e-4; O\_same 3.5e-4 / 4.9e-4; O\_split 3.0 / 27; G\_cal 5.7e-2 / 0.17; G\_unc 0.33 / 2.3; N1 14 / 36.
+
+Part 3 (SP2 cap, then $k = 3$): ALL\_cal reaches .529 (cap 4), .426 (6), .733 (8), .868 (12), .848 (20), .847 (stall); ALL\_unc .538, .436, .559, .636, .604, .617 (diverged 1.9\% at cap 20). The drop from cap 4 to cap 6 is unexplained. \OPEN
+
+\subsection{Precision ladder and sensitivity routes (\scr{ladder.py}, \scr{r123\_float64.py}) [V]}
+
+18 settings, butadiene + acrolein; median / worst relative error of the map:
+
+\begin{center}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Backend & R1 & R2 & R3 (best $h$) & \begin{tabular}[b]{@{}c@{}}sign failures\\ R1 / R2 / R3 (of 144)\end{tabular} \\
+\midrule
+fp64 & 5.5e-15 / 5.7e-13 & 5.1e-15 / 5.7e-13 & 3.7e-9 / 5.4e-9 (1e-4) & 0 / 0 / 0 \\
+fp32 & 2.0e-6 / 6.6e-5 & 2.3e-6 / 6.6e-5 & 2.1e-4 / 1.2e-3 (1e-2) & 0 / 0 / 0 \\
+fp16 pair & 9.1e-6 / 1.3e-4 & 3.7e-6 / 1.3e-4 & 4.1e-4 / 9.3e-4 (3e-2) & 0 / 0 / 0 \\
+int8 & 0.36 / 2.0 & 0.36 / 1.3 & 1.0 / 5.1e3 & 17 / 13 / 130 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For int8, SP2 stalls at an idempotency floor of 5.4e-3, the relative error of $I$ is 0.26 median (1.5 worst, at $\gamma = 0.1$), and R3's median error is at least 1.0 at every step size tried (0.0001 to 0.3). In float64 (\scr{r123\_float64.py}): R1 and R2 match the analytic reference to $\leq$ 5.3e-15, R3 to $\leq$ 3.3e-10, $|\mathrm{R1} - \mathrm{R2}| \leq$ 1.5e-16. Matrix products per full 8-atom map: R2 54--69, R1 306--391, R3 296--359.
+
+\subsection{Catalyst rule table (\scr{h1\_acrolein.py}, \scr{rules.py}) [V]}
+
+Sensitivity map $dI/d(\text{lower } \alpha_k)$, $h_\mathrm{O} = 1$, bond set ``std'', butadiene + acrolein: at $\gamma = 0.3$: C1 +7.2e-3, C2 $-$4.4e-2, C3 $-$1.3e-3, C4 $-$3.8e-2, Cb +1.5e-2, Ca +1.4e-2, Cc +2.6e-2, O +2.05e-2. At $h_\mathrm{O} = 1$ the oxygen is fourth by magnitude; the \scr{O rank} column of the log gives 3, 4, 5 for $h_\mathrm{O} = 0.5$, 1, 2 (I checked the $h_\mathrm{O} = 1$ value against the map, not the other two).
+
+Rule table, butadiene + acrolein, $\gamma = 0.3$ (robust = share of parameter variants with the same sign):
+
+\begin{center}
+\small
+\begin{tabular}{llrlc}
+\toprule
+Fragment & Atom & $L_A$ & Requirement & Robust \\
+\midrule
+diene & C2 & $-$0.0438 & donating & 1.00 \\
+diene & C4 & $-$0.0375 & donating & 1.00 \\
+diene & C1 & +0.0072 & withdrawing & 1.00 \\
+diene & C3 & $-$0.0013 & donating & 1.00 \\
+dienophile & Cc & +0.0261 & withdrawing (through-space) & 1.00 \\
+dienophile & O & +0.0205 & \begin{tabular}[t]{@{}l@{}}withdrawing (H-bond donor / Lewis acid),\\ directed binding\end{tabular} & 1.00 \\
+dienophile & Cb & +0.0151 & withdrawing & 1.00 \\
+dienophile & Ca & +0.0139 & withdrawing & 1.00 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For this system the table ranks carbon sites above the carbonyl oxygen (rank 2 of 4 within the dienophile fragment). In 2-methoxybutadiene + acrolein the ether oxygen gets a donating requirement ($L_A$ $-$0.0110, rank 3 in the diene) and the carbonyl O a withdrawing one (+0.0321). Butadiene + ethylene returns ``no lever'' (negative control, machine-precision zeros). Lowest HOMO-LUMO gap over all acrolein settings: 0.843.
+
+The primary lever ($L_A$) was chosen after the interaction-energy lever gave a donating requirement for the acrolein O ($L_E = -0.0011$, robust). This is post-hoc and must stay disclosed.
+
+\subsection{MolMAC PWM ripple (\scr{ripple\_budget.py}) [V]}
+
+The ripple model is MolMAC's own (\scr{ripple\_shape}, circuit values from \scr{Cfg} in \scr{mol\_engine.py}: $K = 0.0397$, tile of 4, channel start phases 0 / 0.749 / 0.498 / 0.247), imported unchanged and added to the \scr{mc\_budget.py} chip (8-bit weights and duty, 12-bit auto-ranged ADC, 200 chips \x{} 6 settings = 1,200 runs per cell). The ``none'' row reproduces the \scr{mc\_budget.py} ``none'' row exactly (0.996 / 0.962 / 0.886), which checks the harness. $\theta$ is the ADC sample instant as a fraction of the PWM period.
+
+\begin{center}
+\begin{tabular}{lccc}
+\toprule
+Cell & $N = 8$ & $N = 24$ & $N = 40$ \\
+\midrule
+none & .996* & .962* & .886 \\
+ripple, $\theta = 0$ & .993* & .959* & .959* \\
+ripple, $\theta = 0.25$ & .998* & .992* & .941 \\
+ripple, $\theta = 0.5$ & 1.000* & .954* & .960* \\
+ripple ($\theta = 0$) + noise 1e-4 & .994* & .953* & .852 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Ripple size, $|\text{ripple}| / \mathrm{FS}_j$ over all analog products (median / 95th percentile, $\theta = 0$): $N = 8$: 1.6e-4 / 1.3e-3; $N = 24$: 2.8e-5 / 8.0e-4; $N = 40$: 9.0e-6 / 5.8e-4. The other phases differ by less than 20\% in these figures.
+
+Reading:
+\begin{itemize}
+  \item In this model ripple does not reduce success at any $N$ or phase tested: the largest drop against ``none'' is 0.3 percentage points ($N = 8$ and 24 at $\theta = 0$), within the standard error (0.2--0.6 points).
+  \item Ripple relative to full scale falls with $N$ (median by about 18\x{} from $N = 8$ to 40), because branch ripples of mixed sign partly cancel while $\mathrm{FS}_j$ grows. The statement ``ripple is about 10\x{} too large from 24 atoms'' is not supported.
+  \item The 95th-percentile ripple at $N = 8$ (1.3--1.4e-3) is the same order as the handoff's ``1.1--2.0e-3 of full scale''. Whether it is the same quantity cannot be established, since \scr{ripple\_check.py} was not found; the handoff figure is withdrawn and this table replaces it.
+  \item At $N = 40$ the unperturbed 12-bit baseline fails (0.886) and ripple raises it to 0.94--0.96. Gain 0.12\% and offset 1e-4 did the same in \ref{sec:budget}. All three are consistent with dithering of a deterministic quantization error, but that is a hypothesis, not tested here, and it means the $N = 40$ comparison is confounded.
+\end{itemize}
+
+Limits of this measurement: the ripple model is first-order and its LTspice check was not repeated; the ADC is one per column (MolMAC digitizes per tile of 4); matrices are signed, with the sign carried through the ripple's linearity in the branch amplitude; only three sample phases were run; no gain, offset or other noise except in the last row.
+
+%=====================================================================
+\section{Pre-registered predictions versus outcomes}\label{sec:prereg}
+
+Predictions are quoted from the script headers (``written before running''); I could not verify when they were written. \ok{} = held, \no{} = did not hold, \partly{} = partly.
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}lL@{}}
+\toprule
+Script & Outcome \\
+\midrule
+\scr{h1\_acrolein} & P1 ($I > 0$), P2 ($dI/d\delta > 0$), P3 (charge transfer $> 0$ and rising) \ok{} in 18/18 settings. \textbf{P4 \no{} (O in top two by magnitude): fails in 18/18; O ranks 3rd--5th.} \\
+\scr{r123\_float64} & Q1--Q3 \ok{} (5.3e-15, 3.3e-10, 1.5e-16). Q4 \partly: R2 uses fewest products; R1 is about 6\x{} R2, not $\sim$8\x; R3 about equals R1. \\
+\scr{ladder} & L1, L2, L3, L4, L6 \ok. L5 \partly: U-shape and best-$h$ rising \ok{} for fp64/fp32/fp16 pair; for int8 no step size is usable (error $\geq$ 1). \\
+\scr{rules} & C1 \ok, C4 \ok. C2 \partly: O withdrawing and robust \ok, but rank 2 in its fragment (Cc is first). C3 \partly: C2 and C4 donate most; C1 is withdrawing; C3 near zero. \\
+\scr{scale} & S1a \ok{} (COLD 4 $\to$ 6). S1b \no{} (INT8 saves +2 to +5, more than predicted). S1c \no{} (AN8 saves +1 to +4 for $N \leq 32$; AN10 saves +2 to +5, not 1--2). S1d \partly: FP16 pair 17 $\to$ 23 iterations \ok; INT8, AN8 lower. \\
+\scr{s2\_oa} & T1, T2, T3 \ok. T4 \partly: AN8 below INT8 \ok; AN10 is also below INT8 at every $N$, not between INT8 and FP16 pair \no. \textbf{T5 \no: the $\delta_1 = $ 1e-3 and 1e-10 tables are identical.} \\
+\scr{no\_rr} & N1 \ok, N3 \ok. N2 \no{} ($\delta_1 = 0.1$ gives 0.00, no rescue). \\
+\scr{bits} & B1 \no{} (worst-case range: +6 bits from $N = 8$ to 40, not $\sim$2). B2 \no{} (a fitted range saves 0 bits at $N = 8$ and 24). B3 \partly: \ok{} for fit and INT$b$ (+2), \no{} for worst (+6) and ALLb-fit (+4). B4 \no{} (W8D8 variants do reach 95\% at $N = 32$ and 40). \\
+\scr{bits2} & A1 \no{} (pga is 4 bits above ideal at $N = 16$ and 40). A2 \no{} (pga = worst for $N \leq 40$). A3 \partly: INT$b$ +2 from $N = 40$ to 64; ideal is non-monotone. \\
+\scr{mc\_budget} & P1 \partly: \ok{} at $N = 8$; at $N = 40$ the baseline fails so 0.5\% is never reached. P2 \partly. \textbf{P3 \no: calibrated combination fails at $N = 24$ (0.568).} \textbf{P4 \no: failure is not monotone at $N = 40$.} \\
+\scr{robust} & R1 \ok{} (0.959). R2 \no{} (sqrtN, $N = 40$, 1e-4: 0.917). R3 \no{} narrowly (tolerance ratio $N = 8$ to 40 under ``fixed'' exceeds 3). R4 \ok. \\
+\scr{analog\_mc} & M1 \no{} (Q8 .889, O\_split .928, ALL\_cal .847 below 95\% at $k = 3$). M2 \no{} at $k = 0$ (0.336 vs 0.389), equal from $k = 1$. M3 \no{} (N10 and ALL\_unc miss 36--38\% at $k = 3$, not $< 20$\%). H3$'$ \ok{} for O\_same; magnitudes \no{} (O\_split 3.0 vs 0.01--0.1 predicted; N1 14 vs $\leq$ 0.33). H4$'$ \partly. \\
+\scr{ripple\_budget} & Q1 \ok{} ($N = 8$ median 1.6e-4, falling with $N$), Q2 \ok{} ($-$0.3 points at $N = 8$ and 24), Q3 \ok{} (phase changes success by at most 3.8 points), Q4 \ok{} (the ``10\x{} too large'' claim is not supported). \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+%=====================================================================
+\section{Cost accounting (no energy claim)}\label{sec:cost}
+
+No energy was measured, and this note makes no energy claim. What can be stated:
+
+\textbf{Digital work after the front end} [V, derived from \scr{s2\_oa.py} source and log]. Each Ogita-Aishima step is 4 dense $N \times N$ products (stated in the \scr{s2\_oa.py} header), i.e.\ $8N^3$ flops. With the median step counts at $N = 40$ (FP16 pair 1, INT8 4, AN10 5, AN8 6), the refinement costs 8, 32, 40 and 48 $N^3$ flops respectively, plus one Rayleigh-Ritz per block (two $N/2 \times N/2$ symmetric eigenproblems) and the range-finder QR. A dense symmetric eigensolver with eigenvectors costs about $9N^3$ flops (Golub and Van Loan, \emph{Matrix Computations}~\cite{gvl}; figure quoted from memory, to be checked against the book before submission). So for every front end except FP16 pair, the digital refinement alone costs more than solving the problem directly, before any front-end cost is counted. This is the reason no energy saving is possible in this design, and it follows from operation counts, not from energy-per-operation figures.
+
+\textbf{Break-even factors} [V, \scr{scale.py}]: section~\ref{sec:scale}. They exclude the block diagonalizations.
+
+\textbf{Context only, not used in any claim} (literature figures, different processes and conditions, not comparable to each other without normalization):
+\begin{itemize}
+  \item FP64 FMA: 26.7 pJ per instruction, measured on silicon for the FPnew unit (Mach et al., arXiv 2007.01530~\cite{mach}).
+  \item 8b \x{} 8b digital MAC: 0.390 pJ at 0.8 V (Taco et al., 2018, as cited in arXiv 2609.35586~\cite{taco}; primary source not checked).
+  \item Analog in-memory macro: 25.5 TOPS/W for 8b/8b matrix computation, silicon measurement (Zheng et al., DAC 2024, doi 10.1145/3649329.3658472~\cite{zheng}).
+\end{itemize}
+
+Removed from the handoff: the lower bound ``1.8 TOPS/W'' (no source found) and ``10--42 $N^3$ flops'' (no derivation found; replaced by the step-count derivation above).
+
+%=====================================================================
+\section{Enzyme-screening positive control}\label{sec:enzyme}
+
+Data: \scr{rev\_unrev.csv}, 3,619 rows, 9 columns, 22 positives (EC 5.5.1). \scr{rev\_unrev\_normalized.csv} stores EC numbers as integers and cannot be used by these scripts. \V
+
+Full set (\scr{positive\_control.py}; EC number and catalytic activity removed): AUC (metadata / sequence / both): protocol A 0.971 / 0.909 / 0.974; B at $t = 0.40$: 0.969 / 0.902 / 0.971; $t = 0.35$: 0.968 / 0.893 / 0.970; $t = 0.30$: 0.966 / 0.883 / 0.968. \V
+
+Curation-matched cohort (\scr{matched.py}; 199 reviewed entries, 22 positives; trivial baselines: sequence length 0.490, count of non-empty metadata fields 0.652): AUC (metadata / sequence / both): A 0.558 / 0.811 / 0.616; B $t = 0.40$: 0.536 / 0.793 / 0.588; $t = 0.35$: 0.524 / 0.784 / 0.573; $t = 0.30$: 0.493 / 0.769 / 0.539. \V
+
+Background (\scr{background.py}; BLOSUM62 local-alignment identity): positive-vs-negative median 0.038, 95th percentile 0.098, maximum 0.499 ($n = 1{,}320$); positive-vs-positive median 0.256, maximum 0.995 ($n = 462$). At $t = 0.30$, 29.0\% of positive pairs and 0.61\% of background pairs exceed the threshold; the positives form families of sizes 11, 9, 1, 1. All positives are one superfamily, so the test covers sub-families, not unrelated folds. \V
+
+Trivial baselines on the full set [V, one-off command on 2026-11-23, not yet a committed script]: ``reviewed'' status alone (entry name does not start with the accession, as in \scr{matched.py}) gives AUC 0.9754; sequence length alone gives 0.9271. These match the handoff and are the reason the full-set metadata AUC of about 0.97 is read as a curation effect. No repository script prints them; a short script should be added so they are reproducible. \OPEN
+
+%=====================================================================
+\section{What is not claimed}\label{sec:notclaimed}
+
+\begin{itemize}
+  \item That analog hardware is necessary for this problem.
+  \item Any energy advantage. Section~\ref{sec:cost} shows from operation counts that the digital refinement alone exceeds a direct eigensolve for most front ends.
+  \item Any statement about the real MolMAC ripple beyond the model in \scr{mol\_engine.py}: 6.9 uses that model as is. Its LTspice check was not repeated here, and the handoff's ripple figures are withdrawn.
+  \item That the enzyme-screening method works on unrelated folds.
+  \item Any statement about a physical chip: offsets and noise levels are placeholders; gain figures are from MolMAC/VoltMatrix-scale measurements quoted in script headers.
+  \item The VoltMatrix noise comparison from the long document (rests on an unverified unit assumption; excluded).
+  \item That the asynchronicity lever is the ``correct'' proxy: it was chosen after the positive control (post-hoc) and the H\"uckel model has no sigma framework, sterics, solvent, geometry or Pauli repulsion.
+\end{itemize}
+
+%=====================================================================
+\section{Threats to validity}
+
+\begin{enumerate}
+  \item Simulated hardware only; the offset and noise levels swept are placeholders (section 4).
+  \item Post-hoc choice of the primary catalyst lever; the pre-registered P4 (O in the top two by magnitude) failed in 18/18 settings, and the table ranks carbon sites above the carbonyl oxygen.
+  \item Single-superfamily enzyme data.
+  \item $n = 60$ per cell in the bits studies (s.e.\ up to about 0.06); large-$N$ cells are non-monotone and $N \geq 48$ is incomplete.
+  \item Noise-scaling with $N$ is an unresolved hardware question; the tolerance trend differs by model (6.5).
+  \item \textbf{MolMAC ripple.} The handoff's figures (ripple 1.1--2.0e-3 of full scale; ``about 10\x{} too large from 24 atoms'') are withdrawn: their script, \scr{ripple\_check.py}, was not found. The ripple model in \scr{mol\_engine.py} is deterministic, phase-locked and duty-pattern dependent, so it matches neither the offset nor the noise swept in 6.5. \scr{ripple\_budget.py} (6.9) adds that model, unchanged, to the \scr{mc\_budget.py} chip: ripple costs at most 0.3 points of success and shrinks relative to full scale with $N$. The measurement uses one ADC per column, a 12-bit ADC (the $N = 40$ baseline fails at 12 bits) and three sample phases; a 14-bit and a per-tile-ADC repeat have not been run. \OPEN
+  \item Package versions are recorded; results from the workstation have not been compared with the laptop. \OPEN
+  \item \scr{polish.py} (int8 rescue by a short fp32 stage) was not run in the batch and is not reported. \OPEN
+\end{enumerate}
+
+%=====================================================================
+\section{Corrections log}
+
+\begin{enumerate}
+  \item Early misreading of $A$ near zero at weak coupling: I made primary and $A$ gated at $p_1 + p_2 \geq 0.3$.
+  \item \scr{refine} started from a full \scr{eigh(P)}: replaced by a range finder.
+  \item R3 noise test shared one noise stream between the + and $-$ solves: separate streams.
+  \item $\pm$ shown for deterministic modes: marked \texttt{*}, effective $n = 18$.
+  \item SP2 diverged under noise in a 200-chip run: divergence guard, \scr{safe\_err}, aufbau swap, \scr{--part} flag; a wrong-subspace lock at 8 bits fixed by the aufbau check.
+  \item ``Analog saves 0 to +1 step'' and ``8-bit chain is a net cost'' came from one range-finder seed (7); the 200-seed sweep reversed them. The starred rows of \scr{analog\_mc} part 1 still show the single-seed result (6.1).
+  \item ``Worst-case ADC range costs about $\log_2(N)$ bits'' was overstated; the power-of-two auto-range recovered nothing.
+  \item fp32 refinement floor sat on the target at $N \geq 32$: refinement moved to float64.
+  \item Interaction-energy lever failed the carbonyl-O positive control: asynchronicity lever made primary (post-hoc).
+  \item First enzyme-family clustering (3-mer cosine) merged proteins at 4--8\% identity: replaced by alignment identity.
+  \item The original enzyme pipeline's apparent success was a curation artifact (section~\ref{sec:enzyme}).
+  \item (2026-11-23) The handoff table cell ``worst-case range, $N = 64$: not reached by 16'' is not supported: \scr{bits2.py} never runs the worst-case range above $N = 40$ (6.4).
+  \item (2026-11-23) ``Noise tolerance about 1e-3 at 8 atoms, $\leq$ 1e-4 by 24 atoms'' holds only with a 14-bit ADC at $N = 8$, and only under the ``N'' scaling model at $N = 24$; under ``sqrtN'' and ``fixed'' it is 1e-4 to 3e-4 (6.5).
+  \item (2026-11-23) Pre-registered predictions that failed are listed in section 7 (notably h1\_acrolein P4, mc\_budget P3 and P4, s2\_oa T5).
+  \item (2026-11-23) The handoff's ripple statements (``1.1--2.0e-3 of full scale'', ``about 10\x{} too large from 24 atoms'') and energy figures (1.8 TOPS/W, ``10--42 $N^3$ flops'') had no source in the repository and were withdrawn. The ripple was measured directly (6.9); the energy section was rebuilt from operation counts and cited literature (section 8).
+\end{enumerate}
+
+Housekeeping entries (repository and document-editing issues) are omitted.
+
+%=====================================================================
+\section{Reproduction}
+
+Run from \scr{catalyst/} with numpy and scipy (pandas, scikit-learn, biopython for the enzyme scripts). The enzyme scripts take the CSV path as the first argument. \scr{analog\_mc.py} and \scr{mc\_budget.py} use argparse (\scr{--chips}, and \scr{--part \{1,2,3,all\}} for the former); do not pass extra arguments to any script.
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}Llr@{}}
+\toprule
+Script & CSV & Laptop runtime \\
+\midrule
+\scr{h0\_exact}, \scr{h1\_acrolein}, \scr{r123\_float64}, \scr{rules} & no & under 1 s \\
+\scr{ladder} & no & about 6 s \\
+\scr{bits} / \scr{bits2} & no & 10 s / 21 s (9 s on rerun) \\
+\scr{scale}, \scr{s2\_oa}, \scr{no\_rr} & no & 12 s, 5 s, 13 s \\
+\scr{mc\_budget} & no & 109 s \\
+\scr{analog\_mc} & no & 336 s \\
+\scr{robust} & no & 251 s \\
+\scr{ripple\_budget} & no (imports \scr{../mol\_engine.py}) & 111 s \\
+\scr{seed\_sweep} & no & about 8.5 min \\
+\scr{align\_ident}, \scr{background}, \scr{positive\_control}, \scr{matched} & yes & 6--12 s each \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Run \scr{align\_ident.py} first: it writes \scr{ident.json}, which \scr{background.py} and \scr{matched.py} read; it is not committed.
+
+%=====================================================================
+\section{Open items}
+
+\begin{enumerate}
+  \item Add a committed script that prints the ``reviewed alone'' (0.9754) and ``sequence length alone'' (0.9271) AUCs (section~\ref{sec:enzyme}).
+  \item Check the $\sim 9N^3$ eigensolver figure against Golub and Van Loan (section~\ref{sec:cost}).
+  \item Repeat the ripple measurement with a 14-bit ADC (where the $N = 40$ baseline passes) and with a per-tile ADC (6.9, 11.6).
+  \item Explain or re-run the $N = 56$ / 64 ideal-range dip and the missing worst-case $N \geq 48$ cells with more than 60 runs per cell (6.4).
+  \item \scr{s2\_oa.py} $\delta_1$: check whether the cluster threshold is wired in (identical tables for 1e-3 and 1e-10).
+  \item Run \scr{polish.py}; compare workstation and laptop outputs.
+  \item Decide on the VoltMatrix comparison, and the full-record versus judges' version of the long document.
+\end{enumerate}
+
+%=====================================================================
+\begin{thebibliography}{9}
+\bibitem{gvl} G.~H. Golub and C.~F. Van Loan, \emph{Matrix Computations}. (The $9N^3$ figure in section~\ref{sec:cost} is not yet checked against the book.)
+\bibitem{mach} Mach et al., FPnew floating-point unit, arXiv:2007.01530.
+\bibitem{taco} Taco et al., 2018, as cited in arXiv:2609.35586 (primary source not checked).
+\bibitem{zheng} Zheng et al., DAC 2024, doi:\href{https://doi.org/10.1145/3649329.3658472}{10.1145/3649329.3658472}.
+\end{thebibliography}
+
+\end{document}

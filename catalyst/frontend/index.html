@@ -1,0 +1,1201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catalyst requirement pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme:light;
+  --page:#f6f5f1; --panel:#fcfcfb; --sunk:#efeee8; --rule:#e1dfd7; --rule-soft:#edebe4;
+  --ink:#14140f; --ink-2:#56554e; --ink-3:#8a8980;
+  --donate:#2a78d6; --withdraw:#e34948; --amber:#eda100; --accent:#2a78d6;
+  --good:#0ca30c; --bad:#d03b3b;
+  --serif:'Source Serif 4',Georgia,serif;
+  --sans:'Inter',system-ui,-apple-system,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){ :root:where(:not([data-theme="light"])){
+  color-scheme:dark;
+  --page:#121211; --panel:#1a1a19; --sunk:#232320; --rule:#34342f; --rule-soft:#272723;
+  --ink:#f0efec; --ink-2:#c3c2b7; --ink-3:#8e8d84;
+  --donate:#3987e5; --withdraw:#e66767; --amber:#c98500; --accent:#3987e5;
+  --good:#0ca30c; --bad:#e66767;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);font:15px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+[hidden]{display:none !important}
+
+header.top{position:sticky;top:0;z-index:40;background:color-mix(in srgb,var(--page) 90%,transparent);
+  backdrop-filter:blur(10px);border-bottom:1px solid var(--rule)}
+.top-in{max-width:1240px;margin:0 auto;padding:11px 22px;display:flex;align-items:center;gap:18px;justify-content:space-between}
+.brand{font-family:var(--serif);font-size:16px;font-weight:600;white-space:nowrap}
+.brand span{color:var(--ink-3);font-family:var(--sans);font-size:13px;font-weight:400}
+.switch{display:flex;gap:2px;background:var(--sunk);border-radius:999px;padding:3px}
+.switch button{font:500 13px/1 var(--sans);color:var(--ink-2);background:none;border:0;padding:7px 15px;border-radius:999px;cursor:pointer}
+.switch button[aria-current="true"]{background:var(--panel);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+
+main{max-width:1240px;margin:0 auto;padding:22px 22px 70px}
+.panel{background:var(--panel);border:1px solid var(--rule);border-radius:12px;padding:18px 20px}
+h1{font-family:var(--serif);font-size:clamp(25px,3.6vw,33px);line-height:1.15;font-weight:600;margin:0 0 10px;letter-spacing:-.015em}
+h2{font-family:var(--serif);font-size:19px;font-weight:600;margin:0 0 4px}
+h3{font-size:13px;font-weight:600;margin:0 0 10px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
+p{margin:0 0 12px;color:var(--ink-2)}
+.lede{font-size:17px;color:var(--ink-2);max-width:68ch;margin-bottom:18px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+small{font-size:12.5px;color:var(--ink-3);line-height:1.5}
+
+/* controls */
+fieldset{border:0;margin:0;padding:0;display:grid;gap:12px}
+legend{font:600 11.5px var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);margin-bottom:9px;padding:0}
+label{display:grid;gap:5px;font-size:13.5px;color:var(--ink-2)}
+.row{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.val{font:500 12.5px var(--mono);color:var(--accent);font-variant-numeric:tabular-nums}
+select,input[type=number]{font:inherit;font-size:13.5px;padding:7px 9px;border:1px solid var(--rule);border-radius:7px;background:var(--page);color:var(--ink);width:100%}
+input[type=range]{width:100%;accent-color:var(--accent);margin:2px 0}
+.seg{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.seg label{display:flex;align-items:center;gap:7px;padding:7px 9px;border:1px solid var(--rule);border-radius:7px;cursor:pointer;font-size:13px;color:var(--ink)}
+.seg label:has(input:checked){border-color:var(--accent);background:color-mix(in srgb,var(--accent) 11%,transparent)}
+.seg input{accent-color:var(--accent);margin:0}
+.seg.wide label{grid-column:1/-1}
+.check{display:flex;align-items:center;gap:8px;color:var(--ink)}
+.sub{display:grid;gap:11px;padding-left:11px;border-left:2px solid var(--rule)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.act{font:600 13px var(--sans);padding:8px 14px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+button.act.ghost{background:transparent;color:var(--accent)}
+
+/* status */
+.pill{display:inline-flex;align-items:center;gap:6px;font:600 12px var(--sans);padding:3px 10px;border-radius:999px;border:1px solid var(--rule);color:var(--ink-2);white-space:nowrap}
+.pill.good{color:var(--good);border-color:color-mix(in srgb,var(--good) 38%,transparent);background:color-mix(in srgb,var(--good) 9%,transparent)}
+.pill.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 38%,transparent);background:color-mix(in srgb,var(--bad) 9%,transparent)}
+.statbar{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center;font-size:12.5px;color:var(--ink-3);font-family:var(--mono)}
+.statbar b{color:var(--ink);font-weight:500}
+
+svg{display:block;width:100%;height:auto;overflow:visible}
+.tip{position:fixed;pointer-events:none;opacity:0;transition:opacity .09s;background:var(--ink);color:var(--page);
+  font:12.5px/1.45 var(--sans);padding:7px 10px;border-radius:7px;z-index:99;max-width:250px;box-shadow:0 4px 14px rgba(0,0,0,.2)}
+.st{font-family:var(--sans);font-size:11.5px;fill:var(--ink-2)}
+.st.sm{font-size:10.5px;fill:var(--ink-3)}
+.st.b{font-weight:600;fill:var(--ink)}
+.atomg{cursor:pointer}
+.atomg:hover .ring{stroke:var(--ink);stroke-width:2}
+.atomg.sel .ring{stroke:var(--ink);stroke-width:2.5}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--rule-soft)}
+th{font-size:11px;font-weight:600;letter-spacing:.055em;text-transform:uppercase;color:var(--ink-3);border-bottom:1px solid var(--rule)}
+td{color:var(--ink-2)}
+td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+tbody tr:last-child td{border-bottom:0}
+.sw{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:baseline}
+.tbl-wrap{overflow-x:auto}
+
+/* ---- explore layout ---- */
+#view-explore{display:grid;gap:16px}
+.ex-top{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(290px,1fr);gap:16px;align-items:start}
+@media(max-width:900px){.ex-top{grid-template-columns:1fr}}
+.hintbar{display:flex;gap:10px;align-items:center;font-size:12.5px;color:var(--ink-3);margin-top:10px;flex-wrap:wrap}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--ink-2)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px}
+#detail .big{font-family:var(--serif);font-size:26px;font-weight:600;line-height:1.1;margin-bottom:2px}
+#detail .dir{font-weight:600;font-size:15px;margin:10px 0 4px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px;margin-top:12px;padding-top:12px;border-top:1px solid var(--rule-soft)}
+.kv dt{color:var(--ink-3)}
+.kv dd{margin:0;font-family:var(--mono);color:var(--ink)}
+.reqlist{list-style:none;margin:0;padding:0;display:grid;gap:7px}
+.reqlist li{display:grid;grid-template-columns:52px 1fr auto;gap:10px;align-items:baseline;padding:8px 11px;border-radius:8px;
+  background:var(--sunk);border-left:3px solid var(--rule);cursor:pointer;font-size:13.5px}
+.reqlist li.pos{border-left-color:var(--withdraw)} .reqlist li.neg{border-left-color:var(--donate)}
+.reqlist li:hover{background:var(--rule-soft)}
+.reqlist .nm{font-family:var(--mono);font-weight:500;color:var(--ink)}
+.reqlist .nu{font-family:var(--mono);font-size:12.5px;color:var(--ink-3)}
+.ctl-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:18px}
+
+.grid2x{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:700px){.grid2x{grid-template-columns:1fr}}
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:16px 0 4px}
+.stat{background:var(--sunk);border:1px solid var(--rule);border-radius:10px;padding:13px 15px}
+.stat .sl{font-size:12px;color:var(--ink-3);margin-bottom:3px}
+.stat .sv{font-family:var(--serif);font-size:23px;font-weight:600;line-height:1.1;color:var(--ink)}
+.stat .sn{font-size:12px;color:var(--ink-3);margin-top:4px;line-height:1.45}
+.cands{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px}
+.cand{background:var(--sunk);border:1px solid var(--rule);border-radius:11px;padding:15px 17px}
+.cand .ch{display:flex;gap:10px;align-items:baseline;justify-content:space-between;flex-wrap:wrap;margin-bottom:7px}
+.cand h4{font-family:var(--serif);font-size:17px;font-weight:600;margin:0}
+.cand p{font-size:13.5px;margin:0 0 9px}
+.cand .ex{font-family:var(--mono);font-size:12.5px;color:var(--ink);background:var(--panel);
+  border:1px solid var(--rule);border-radius:7px;padding:8px 10px}
+.cand .lim{font-size:12.5px;color:var(--ink-3);margin-bottom:0}
+.struct{background:var(--panel);border:1px solid var(--rule);border-radius:9px;padding:6px 4px;margin:0 0 11px}
+.struct svg{display:block;width:100%;height:auto;overflow:visible}
+.struct .cap{font-size:11.5px;color:var(--ink-3);text-align:center;margin:2px 0 3px;line-height:1.4}
+.panel.quiet{border-style:dashed}
+#view-cand{display:grid;gap:16px}
+#view-cand .sgrid{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+
+/* ---- instrument layout ---- */
+#view-inst{display:grid;grid-template-columns:286px minmax(0,1fr);gap:18px;align-items:start}
+@media(max-width:940px){#view-inst{grid-template-columns:1fr}}
+#controls{position:sticky;top:64px;display:grid;gap:16px;max-height:calc(100vh - 86px);overflow-y:auto}
+@media(max-width:940px){#controls{position:static;max-height:none}}
+#stages{display:grid;gap:16px}
+.sgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px}
+.stage h3{display:flex;gap:9px;align-items:baseline;text-transform:none;letter-spacing:0;font-size:15px;color:var(--ink);font-weight:600}
+.stage h3 b{font:500 11px var(--mono);color:var(--accent)}
+.stage .what{font-size:12.5px;color:var(--ink-3);margin:-4px 0 12px;line-height:1.5}
+.note{font-size:12px;color:var(--ink-3);margin:10px 0 0;line-height:1.5}
+textarea{width:100%;min-height:200px;font:12px/1.5 var(--mono);padding:11px;border:1px solid var(--rule);border-radius:8px;background:var(--page);color:var(--ink);resize:vertical}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+footer{max-width:1240px;margin:0 auto;padding:4px 22px 50px;color:var(--ink-3);font-size:12.5px;line-height:1.6}
+footer p{max-width:92ch;margin:0 0 7px;color:var(--ink-3)}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="top-in">
+    <div class="brand">Catalyst requirement <span>&nbsp;/ Hückel pipeline</span></div>
+    <nav class="switch" aria-label="Mode">
+      <button id="b-exp" aria-current="true">Explore</button>
+      <button id="b-can" aria-current="false">Candidates</button>
+      <button id="b-ins" aria-current="false">Instrument</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<!-- ================= EXPLORE ================= -->
+<div id="view-explore">
+
+  <div>
+    <h1>Where would a catalyst have to sit, and what would it have to do?</h1>
+    <p class="lede">Pick a reaction pair. The model solves its π-electron structure, then tests every atom in turn: if a catalyst sat next to <em>this</em> atom, how much would it shift the reaction? Click any atom to see its answer.</p>
+  </div>
+
+  <div class="ex-top">
+    <section class="panel">
+      <div class="legend" style="margin-bottom:6px">
+        <span><i style="background:var(--donate)"></i>Wants electrons pushed <b>in</b> (donating)</span>
+        <span><i style="background:var(--withdraw)"></i>Wants electrons pulled <b>out</b> (withdrawing)</span>
+      </div>
+      <div id="mol-ex"></div>
+      <div class="hintbar">
+        <span>Halo size = how big a lever that atom is.</span>
+        <span id="ex-async" class="mono"></span>
+      </div>
+    </section>
+
+    <section class="panel" id="detail" aria-live="polite">
+      <h3>Atom detail</h3>
+      <div id="detail-body"></div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <h3>Strongest levers</h3>
+    <ul class="reqlist" id="reqlist"></ul>
+  </section>
+
+  <section class="panel">
+    <h3>Try changing the chemistry</h3>
+    <div class="ctl-strip">
+      <label for="e-mol">Reaction pair
+        <select id="e-mol">
+          <option value="butadiene + acrolein" selected>Butadiene + acrolein</option>
+          <option value="butadiene + ethylene">Butadiene + ethylene (control)</option>
+          <option value="2-methoxybutadiene + acrolein">2-Methoxybutadiene + acrolein</option>
+        </select>
+      </label>
+      <label for="e-gamma"><span class="row">How far along the reaction is &nbsp;<span class="val" id="e-gamma-v"></span></span>
+        <input id="e-gamma" type="range" min="0.05" max="1" step="0.05" value="0.3">
+        <small>Coupling γ at the two forming bonds. Low = the molecules have barely met; high = nearly bonded.</small>
+      </label>
+      <label for="e-ho"><span class="row">Carbonyl oxygen strength <span class="val" id="e-ho-v"></span></span>
+        <input id="e-ho" type="range" min="0.5" max="2" step="0.25" value="1">
+        <small>h<sub>O</sub>. How electronegative the C=O oxygen is held to be.</small>
+      </label>
+    </div>
+    <p class="note" id="e-chem-note"></p>
+  </section>
+
+  <section class="panel">
+    <h3>What imperfect arithmetic costs you</h3>
+    <p style="font-size:14px">The same pipeline on deliberately degraded arithmetic. At eight atoms the answer stays right &mdash; what you pay is <em>extra exact refinement steps</em> afterwards. Grow the system and the tolerance collapses: past about 24 atoms, noise that was free at eight atoms stops the pipeline converging at all.</p>
+    <div class="ctl-strip">
+      <div>
+        <label style="margin-bottom:10px">Arithmetic</label>
+        <div class="seg wide" id="e-fe">
+          <label><input type="radio" name="efe" value="fp64" checked> Exact float64</label>
+          <label><input type="radio" name="efe" value="int8"> INT8 digital</label>
+          <label><input type="radio" name="efe" value="analog"> Analog array</label>
+        </div>
+      </div>
+      <label for="e-size">System size
+        <select id="e-size">
+          <option value="8" selected>8 atoms &mdash; the real pair</option>
+          <option value="16">16 atoms &mdash; model chain</option>
+          <option value="24">24 atoms &mdash; model chain</option>
+          <option value="32">32 atoms &mdash; model chain</option>
+          <option value="40">40 atoms &mdash; model chain</option>
+        </select>
+        <small>Above 8 this is the extended polyene/polyenal family used for the scaling study, not a real reagent.</small>
+      </label>
+      <label for="e-noise"><span class="row">Read noise <span class="val" id="e-noise-v"></span></span>
+        <input id="e-noise" type="range" min="0" max="0.003" step="0.00005" value="0.0001">
+        <small>Fraction of column full scale. Analog only. These levels are placeholders, not measured from a device.</small>
+      </label>
+      <label for="e-adc"><span class="row">ADC resolution <span class="val" id="e-adc-v"></span></span>
+        <input id="e-adc" type="range" min="8" max="16" step="1" value="12">
+        <small>Analog only.</small>
+      </label>
+    </div>
+    <div class="statbar" style="margin-top:16px" id="e-hw"></div>
+    <p class="note" id="e-hw-note"></p>
+  </section>
+
+  <section class="panel">
+    <h3>What this does not claim</h3>
+    <p style="font-size:14px;margin:0">Simple Hückel theory has no σ framework, sterics, solvent, geometry or Pauli repulsion, so a catalyst that is electronically ideal and physically in the way looks ideal here. The analog array is a behavioural simulation, not hardware. This design cannot save energy: the exact refinement alone costs about as much as diagonalising the matrix directly. And the asynchronicity lever became the primary observable only after the interaction-energy lever failed a control — that choice was made after seeing results.</p>
+  </section>
+</div>
+
+<!-- ================= CANDIDATES ================= -->
+<div id="view-cand" hidden>
+  <div>
+    <h1>What to actually put there</h1>
+    <p class="lede">The rule table says <em>which atom</em> and <em>which direction</em>. Turning that into a catalyst needs one more filter from the model, and then chemistry the model does not contain. Both halves are below, kept apart on purpose.</p>
+  </div>
+
+  <section class="panel" style="margin-top:16px">
+    <h3>Step 1 — which levers can anything actually reach</h3>
+    <p>Seven of the eight atoms are carbons inside the π system. A catalyst can only influence those through space, by sitting nearby as a charge or a field. One atom, the carbonyl oxygen, has a lone pair that a group can be <em>aimed</em> at. The pipeline labels this itself, and it changes the answer completely.</p>
+    <div id="reach-chart"></div>
+    <div class="grid2x" style="margin-top:14px">
+      <div class="stat"><div class="sl">Largest lever overall</div><div class="sv" id="r-top"></div><div class="sn">through-space only — no group can bind here</div></div>
+      <div class="stat"><div class="sl">Largest lever you can bind to</div><div class="sv" id="r-bind"></div><div class="sn" id="r-bind-n"></div></div>
+    </div>
+    <p class="note" id="reach-note"></p>
+    <p class="note" style="border-left:3px solid var(--withdraw);padding-left:12px;margin-top:14px"><b>This does not rescue the failed prediction.</b> The pre-registered guess was that the carbonyl oxygen would rank in the top two <em>by magnitude</em>, and it does not — it is fourth, in all 18 settings tested. The filter above is a separate observation: among atoms a chemist can actually put something on, it ranks first. Both statements are true and the first one is still a miss.</p>
+  </section>
+
+  <section class="panel">
+    <h3>Step 2 — how hard should it pull</h3>
+    <p>Dragging h<sub>O</sub> makes the carbonyl oxygen more electron-withdrawing, which is how a coordinated Lewis acid or a hydrogen-bond donor is represented in a Hückel model. Everything below is recomputed live.</p>
+    <label for="c-ho" style="max-width:420px"><span class="row">Withdrawal at the carbonyl oxygen &nbsp;<span class="val" id="c-ho-v"></span></span>
+      <input id="c-ho" type="range" min="0" max="3" step="0.05" value="1">
+      <small>h<sub>O</sub> = 1 is plain acrolein, uncatalysed. Higher means a stronger pull.</small>
+    </label>
+    <div class="grid3" id="c-stats"></div>
+    <div class="sgrid" style="margin-top:6px">
+      <div><div id="c-chart-I"></div></div>
+      <div><div id="c-chart-gap"></div></div>
+      <div><div id="c-chart-lev"></div></div>
+    </div>
+    <p class="note" id="c-note"></p>
+  </section>
+
+  <section class="panel">
+    <h3>Step 3 — classes of catalyst that do this</h3>
+    <p>These are not model output. The model produced a requirement; this is the published chemistry that implements it, listed so the requirement can be checked against something real. Nothing here is ranked by the model — it cannot rank them, for the reasons in step 4.</p>
+
+    <div class="cands">
+      <article class="cand">
+        <div class="ch"><h4>Lewis acids on the carbonyl oxygen</h4><span class="pill good">direct match</span></div>
+        <div class="struct" id="st-lewis"></div>
+        <p>A metal centre coordinates the carbonyl lone pair and pulls electron density out of the dienophile. This is the closest real-world analogue of what the model does to the oxygen, and the oldest trick in the field.</p>
+        <p class="ex">AlCl<sub>3</sub> · BF<sub>3</sub> · TiCl<sub>4</sub> · SnCl<sub>4</sub> · ZnCl<sub>2</sub> · Li<sup>+</sup></p>
+        <p class="lim">A DFT study ordered their catalytic strength as I<sub>2</sub> &lt; SnCl<sub>4</sub> &lt; TiCl<sub>4</sub> &lt; ZnCl<sub>2</sub> &lt; BF<sub>3</sub> &lt; AlCl<sub>3</sub>. The model cannot reproduce that ordering — it has no metal, no geometry and no sterics.</p>
+      </article>
+
+      <article class="cand">
+        <div class="ch"><h4>Hydrogen-bond donors</h4><span class="pill good">direct match</span></div>
+        <div class="struct" id="st-hbond"></div>
+        <p>Two N–H bonds clamp the carbonyl oxygen and withdraw density without any metal. This is exactly the requirement the model prints for that atom: “withdrawing — H-bond donor or Lewis acid on the lone pair”.</p>
+        <p class="ex">Schreiner's thiourea, N,N′-bis[3,5-bis(trifluoromethyl)phenyl]thiourea · squaramides · chiral diols (TADDOL-type)</p>
+        <p class="lim">Attractive for a pitch because it is metal-free and works in water. The model says nothing about which donor, or about enantioselectivity.</p>
+      </article>
+
+      <article class="cand">
+        <div class="ch"><h4>Iminium organocatalysis</h4><span class="pill">out of model scope</span></div>
+        <div class="struct" id="st-iminium"></div>
+        <p>Acrolein is an α,β-unsaturated aldehyde — precisely the substrate class MacMillan's imidazolidinone catalysts were built for. A chiral secondary amine condenses with the aldehyde to form an iminium ion, lowering the LUMO the way a Lewis acid would.</p>
+        <p class="ex">First- and second-generation imidazolidinones (Ahrendt, Borths &amp; MacMillan, <i>JACS</i> 2000)</p>
+        <p class="lim"><b>The model cannot score this one.</b> Iminium formation is covalent: it replaces the C=O with a C=N<sup>+</sup>, which is a different molecule, not a perturbed one. Our δ at the oxygen cannot represent it. Worth naming in a pitch as the obvious real-world route, but it is outside what was computed.</p>
+      </article>
+
+      <article class="cand">
+        <div class="ch"><h4>Proteins</h4><span class="pill">partial match</span></div>
+        <div class="struct" id="st-protein"></div>
+        <p>A designed Diels–Alderase, DA_20_00 (PDB 3I1C), was built on the same reasoning: a hydrogen-bond donor aimed at the dienophile carbonyl to lower its LUMO, and an acceptor at the diene to raise its HOMO. Among natural enzymes, SpnF places a threonine hydrogen bond on the substrate carbonyl; AbyU instead works by forcing the substrate into shape.</p>
+        <p class="ex">DA_20_00 / PDB 3I1C · SpnF · AbyU / PDB 5DYV</p>
+        <p class="lim">The designed enzyme agrees with the model on the oxygen and on direction. AbyU is a warning: it catalyses mainly through geometry, which this model has none of.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h3>Step 4 — what the model cannot tell you</h3>
+    <ul style="margin:0 0 4px">
+      <li><b>It cannot pick a catalyst.</b> With no sterics, geometry or solvent, AlCl<sub>3</sub> and BF<sub>3</sub> are the same object to this model. It narrows the search to a site and a direction; a chemist picks the reagent.</li>
+      <li><b>It cannot do enantioselectivity</b>, which is what most of the modern literature is actually for. The model has no three-dimensional structure, so it has no face to select.</li>
+      <li><b>It cannot represent covalent catalysis</b>, which rules out the iminium route above.</li>
+      <li><b>Its textbook justification is contested.</b> Recent DFT work argues the frontier-orbital story for Lewis acid catalysis is wrong, and that relief of Pauli repulsion is what lowers the barrier.</li>
+    </ul>
+    <div class="panel quiet" style="margin-top:16px;background:var(--sunk)">
+      <p style="margin:0"><b>The one place that last point cuts the other way.</b> The same work reports that Lewis acids make the reaction markedly <em>more asynchronous</em> — in their calculations the difference between the two forming bonds grows from about 0.46 Å uncatalysed to 0.78 Å with AlCl<sub>3</sub> and 0.91 Å with Li<sup>+</sup>, and protonation tips it fully stepwise. Asynchronicity is the quantity this pipeline tracks, and the scan in step 2 moves the same way for the same reason. The two are not numerically comparable — ours is a bond-order difference in units of |β|, theirs a bond length in ångström — but the observable that was picked here post-hoc turns out to be the one that recent mechanistic work says actually changes. That is a point in favour of the observable, not of the Hückel justification that was originally given for it.</p>
+    </div>
+  </section>
+</div>
+
+<!-- ================= INSTRUMENT ================= -->
+<div id="view-inst" hidden>
+
+  <form id="controls" class="panel" onsubmit="return false">
+    <fieldset>
+      <legend>Molecule</legend>
+      <label for="molecule">Reaction pair
+        <select id="molecule">
+          <option value="butadiene + acrolein" selected>Butadiene + acrolein</option>
+          <option value="butadiene + ethylene">Butadiene + ethylene (control)</option>
+          <option value="2-methoxybutadiene + acrolein">2-Methoxybutadiene + acrolein</option>
+          <option value="chain">Extended chain (size study)</option>
+        </select>
+      </label>
+      <div id="chain-opts" class="sub" hidden>
+        <label for="ld"><span class="row">Diene length <span class="val" id="ld-v"></span></span><input id="ld" type="range" min="4" max="20" step="2" value="12"></label>
+        <label for="le"><span class="row">Dienophile length <span class="val" id="le-v"></span></span><input id="le" type="range" min="2" max="20" step="1" value="12"></label>
+        <label class="check" for="endo"><input id="endo" type="checkbox" checked> Dienophile ends in C=O</label>
+      </div>
+      <label for="gamma"><span class="row">Coupling γ at forming bonds <span class="val" id="gamma-v"></span></span><input id="gamma" type="range" min="0.05" max="1" step="0.05" value="0.3"></label>
+      <label for="ho" id="ho-row"><span class="row"><span>Carbonyl O parameter h<sub>O</sub></span> <span class="val" id="ho-v"></span></span><input id="ho" type="range" min="0.5" max="2" step="0.25" value="1"></label>
+      <label for="kset">Bond parameters
+        <select id="kset"><option value="std" selected>All k = 1 (standard)</option><option value="2312">C=C 1.1, C–C 0.9</option></select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Front end</legend>
+      <div class="seg">
+        <label><input type="radio" name="fe" value="fp64"> float64</label>
+        <label><input type="radio" name="fe" value="fp32"> float32</label>
+        <label><input type="radio" name="fe" value="fp16pair"> FP16-pair</label>
+        <label><input type="radio" name="fe" value="int8"> INT8</label>
+        <label style="grid-column:1/-1"><input type="radio" name="fe" value="analog" checked> Analog array (behavioural)</label>
+      </div>
+      <div id="analog-opts" class="sub">
+        <label for="adc"><span class="row">ADC resolution <span class="val" id="adc-v"></span></span><input id="adc" type="range" min="8" max="16" step="1" value="12"></label>
+        <label for="range">ADC range
+          <select id="range"><option value="fitted" selected>Fitted to each product</option><option value="worst">Worst-case column sum</option></select>
+        </label>
+        <label for="gain"><span class="row">Per-cell gain error σ <span class="val" id="gain-v"></span></span><input id="gain" type="range" min="0" max="5" step="0.06" value="0.12"></label>
+        <label for="offset"><span class="row">Column offset (of full scale) <span class="val" id="offset-v"></span></span><input id="offset" type="range" min="0" max="0.01" step="0.0001" value="0.0001"></label>
+        <label for="noise"><span class="row">Read noise (of full scale) <span class="val" id="noise-v"></span></span><input id="noise" type="range" min="0" max="0.003" step="0.00005" value="0.0001"></label>
+        <label for="chip">Simulated chip <input id="chip" type="number" min="0" max="9999" value="1"></label>
+        <small>Weights and duty cycles are 8-bit. Offset and noise levels are placeholders; only the gain figures come from measured MolMAC/VoltMatrix numbers.</small>
+      </div>
+      <label for="rseed">Refinement start (random seed) <input id="rseed" type="number" min="0" max="9999" value="7"></label>
+    </fieldset>
+  </form>
+
+  <div id="stages">
+    <section class="panel">
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <h2 style="margin:0">Run status</h2><span id="status" class="pill"></span>
+      </div>
+      <div class="statbar" id="meta"></div>
+    </section>
+
+    <div class="sgrid">
+      <section class="panel stage">
+        <h3><b>01</b>Molecule</h3>
+        <p class="what">Diene over dienophile; amber dashes are the two bonds that form. Halo = sensitivity lever.</p>
+        <div id="mol-in"></div><p class="note" id="mol-note"></p>
+      </section>
+
+      <section class="panel stage">
+        <h3><b>02</b>Hückel matrix H(γ)</h3>
+        <p class="what">π model of the pair. Diagonal is −h<sub>i</sub>, off-diagonal −k<sub>ij</sub>; amber cells are the forming bonds.</p>
+        <div id="matrix"></div><p class="note" id="matrix-note"></p>
+      </section>
+
+      <section class="panel stage">
+        <h3><b>03</b>SP2 purification</h3>
+        <p class="what">Matrix products only, in the selected precision. Idempotency error |Tr X − ‖X‖²| per iteration.</p>
+        <div id="sp2"></div><p class="note" id="sp2-note"></p>
+      </section>
+
+      <section class="panel stage">
+        <h3><b>04</b>Exact refinement</h3>
+        <p class="what">Range finder, one Rayleigh–Ritz per block, then Ogita–Aishima steps in float64.</p>
+        <div id="refine"></div><p class="note" id="refine-note"></p>
+      </section>
+    </div>
+
+    <section class="panel stage">
+      <h3><b>05</b>Sensitivity map</h3>
+      <p class="what">dI/d(lowering α at atom k). Positive = the atom wants an electron-withdrawing environment.</p>
+      <div id="map"></div><p class="note" id="map-note"></p>
+    </section>
+
+    <section class="panel stage">
+      <h3><b>06</b>Rule table, every atom</h3>
+      <p class="what">Rank is within each fragment by lever magnitude. “Sign stable” is the share of parameter variants (h<sub>O</sub>, bond set, γ) giving the same requirement.</p>
+      <div class="tbl-wrap" id="table"></div>
+    </section>
+
+    <section class="panel stage">
+      <h3><b>07</b>Report</h3>
+      <p class="what">Plain-text record of this exact run, ready to paste into notes.</p>
+      <textarea id="report" aria-label="Report" readonly></textarea>
+      <div class="btns">
+        <button id="copy-md" type="button" class="act">Copy report</button>
+        <button id="copy-json" type="button" class="act ghost">Copy as JSON</button>
+        <span id="copy-say" class="pill" hidden></span>
+      </div>
+    </section>
+  </div>
+</div>
+
+</main>
+
+<footer>
+  <p><b>Model limits.</b> Simple Hückel theory has no σ framework, sterics, solvent, geometry or Pauli repulsion. The requirements are a labelled heuristic, checked against known chemistry in three ways: Lewis-acid and H-bond catalysis at the carbonyl oxygen comes out as “withdrawing”, the all-carbon pair gives no lever, and an ether oxygen on the diene comes out as “donating”.</p>
+  <p><b>Hardware.</b> The analog front end is a behavioural simulation, not hardware; offset and noise levels are placeholders. In this design it cannot save energy: the exact refinement alone costs about as much as diagonalising H directly.</p>
+  <p><b>Disclosure.</b> The asynchronicity lever was made primary after the interaction-energy lever failed the carbonyl-oxygen control — a post-hoc choice. The pre-registered prediction that the carbonyl oxygen would rank in the top two by magnitude failed in 18 of 18 settings.</p>
+</footer>
+
+<div class="tip" id="tip"></div>
+
+<script src="engine.js"></script>
+<script>
+(function(){
+"use strict";
+const E=window.Engine, $=id=>document.getElementById(id), NS="http://www.w3.org/2000/svg";
+const PRESETS=E.presets();
+const tip=$("tip");
+function mk(t,a){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);return e;}
+function el(t,c,txt){const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e;}
+function showTip(e,h){tip.innerHTML=h;tip.style.opacity="1";moveTip(e);}
+function moveTip(e){const r=tip.getBoundingClientRect();let x=e.clientX+14,y=e.clientY-r.height-10;
+  if(x+r.width>innerWidth-8)x=e.clientX-r.width-14; if(y<8)y=e.clientY+18;
+  tip.style.left=x+"px";tip.style.top=y+"px";}
+function hideTip(){tip.style.opacity="0";}
+function bindTip(n,h){n.addEventListener("mouseenter",e=>showTip(e,h));n.addEventListener("mousemove",moveTip);n.addEventListener("mouseleave",hideTip);}
+const fmt=(v,d)=>(v>=0?"+":"−")+Math.abs(v).toFixed(d==null?4:d);
+const expo=v=>{const s=Math.abs(v); return s===0?"0":s.toExponential(1);};
+
+/* ---------------- molecule layout ---------------- */
+function layout(spec){
+  const A=spec.atoms, n=A.length;
+  const dieneAll=[], dieneMain=[], subs=[];
+  A.forEach((a,i)=>{ if(a.frag==="diene"){dieneAll.push(i); (a.t==="OR"?subs:dieneMain).push(i);} });
+  const pA=spec.form[0][1], pB=spec.form[1][1];
+  const dA=spec.form[0][0], dB=spec.form[1][0];
+  const rest=[]; A.forEach((a,i)=>{ if(a.frag==="dienophile"&&i!==pA&&i!==pB) rest.push(i); });
+  const u={}, topY=0, botY=2.05;
+  dieneMain.forEach((i,j)=>{ u[i]=[j, topY+(j%2?0.30:0)]; });
+  subs.forEach(i=>{ const nb=(spec.bonds.find(b=>b[0]===i)||spec.bonds.find(b=>b[1]===i));
+    const o=nb?(nb[0]===i?nb[1]:nb[0]):0; u[i]=[(u[o]?u[o][0]:0), (u[o]?u[o][1]:0)-1.15]; });
+  const xA=u[dA]?u[dA][0]:0, xB=u[dB]?u[dB][0]:3;
+  u[pA]=[xA, botY]; u[pB]=[xB, botY];
+  rest.forEach((i,j)=>{ u[i]=[xB+(j+1), botY+((j%2)?0.30:0)]; });
+  let minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9;
+  for(let i=0;i<n;i++){const[x,y]=u[i]||[0,0];minx=Math.min(minx,x);maxx=Math.max(maxx,x);miny=Math.min(miny,y);maxy=Math.max(maxy,y);}
+  return {u,minx,maxx,miny,maxy};
+}
+function drawMolecule(host, spec, map, opts){
+  opts=opts||{};
+  const A=spec.atoms, n=A.length, L=layout(spec);
+  const span=Math.max(L.maxx-L.minx,1), rows=Math.max(L.maxy-L.miny,1);
+  const W=660, pad=46;
+  const dx=Math.min(74,(W-2*pad)/span);
+  const big=dx>=40;
+  const H=pad*2+rows*Math.max(62,dx*0.95);
+  const dy=rows>0?(H-2*pad)/rows:0;
+  const px=i=>pad+((L.u[i][0]-L.minx))*dx + (W-2*pad-span*dx)/2;
+  const py=i=>pad+((L.u[i][1]-L.miny))*dy;
+  const svg=mk("svg",{viewBox:"0 0 "+W+" "+H,role:"img","aria-label":"Reaction pair with sensitivity halos"});
+  const maxAbs=map?Math.max(...map.map(Math.abs),1e-12):1;
+  const dead=map?maxAbs<1e-9:true;
+
+  spec.bonds.forEach(([i,j,kind])=>{
+    svg.appendChild(mk("line",{x1:px(i),y1:py(i),x2:px(j),y2:py(j),stroke:"var(--ink)","stroke-width":2,"stroke-linecap":"round",opacity:.85}));
+    if(kind==="C=C"||kind==="C=O"){
+      const ax=px(j)-px(i),ay=py(j)-py(i),len=Math.hypot(ax,ay)||1,ox=-ay/len*4.5,oy=ax/len*4.5;
+      svg.appendChild(mk("line",{x1:px(i)+ox+ax*.17,y1:py(i)+oy+ay*.17,x2:px(j)+ox-ax*.17,y2:py(j)+oy-ay*.17,
+        stroke:"var(--ink)","stroke-width":2,"stroke-linecap":"round",opacity:.5}));
+    }
+  });
+  spec.form.forEach(([i,j])=>{
+    svg.appendChild(mk("line",{x1:px(i),y1:py(i),x2:px(j),y2:py(j),stroke:"var(--amber)","stroke-width":2.4,
+      "stroke-dasharray":"6 5","stroke-linecap":"round"}));
+  });
+
+  A.forEach((a,i)=>{
+    const v=map?map[i]:0, mag=dead?0:Math.abs(v)/maxAbs;
+    const col=v>0?"var(--withdraw)":"var(--donate)";
+    const g=mk("g",{class:"atomg"+(opts.sel===i?" sel":"")});
+    if(!dead&&mag>0.015) g.appendChild(mk("circle",{cx:px(i),cy:py(i),r:13+Math.sqrt(mag)*(big?23:15),fill:col,opacity:.26}));
+    g.appendChild(mk("circle",{cx:px(i),cy:py(i),r:big?13:10,fill:"var(--panel)",stroke:a.t==="C"?"var(--ink-2)":col,
+      "stroke-width":a.t==="C"?1.5:2.4,class:"ring"}));
+    if(big||n<=14){
+      const t=mk("text",{x:px(i),y:py(i)+4,"text-anchor":"middle",class:"st b"});
+      t.style.fontSize=(a.name.length>3?9:11)+"px"; t.textContent=a.name; g.appendChild(t);
+    }
+    const dirTxt=dead?"no lever":(v>0?"wants electrons pulled out":"wants electrons pushed in");
+    bindTip(g,"<b>"+a.name+"</b> · "+a.frag+"<br>lever "+fmt(v)+"<br>"+dirTxt);
+    if(opts.onPick) g.addEventListener("click",()=>opts.onPick(i));
+    svg.appendChild(g);
+  });
+  host.replaceChildren(svg);
+}
+
+/* ---------------- small charts ---------------- */
+function lineChart(host, series, o){
+  o=o||{}; const W=560,H=o.h||210,L=50,R=18,T=18,B=34;
+  const svg=mk("svg",{viewBox:"0 0 "+W+" "+H});
+  const all=series.flatMap(s=>s.pts);
+  if(!all.length){host.replaceChildren(svg);return;}
+  const xs=all.map(p=>p[0]), ys=all.map(p=>p[1]).filter(Number.isFinite);
+  let y0=o.ymin!=null?o.ymin:Math.min(...ys), y1=o.ymax!=null?o.ymax:Math.max(...ys);
+  if(y1-y0<1e-9){y1=y0+1;}
+  const x0=Math.min(...xs), x1=Math.max(...xs,x0+1);
+  const X=v=>L+(v-x0)/(x1-x0)*(W-L-R), Y=v=>H-B-(Math.min(Math.max(v,y0),y1)-y0)/(y1-y0)*(H-B-T);
+  const ticks=o.yticks||4;
+  for(let i=0;i<=ticks;i++){const v=y0+(y1-y0)*i/ticks;
+    svg.appendChild(mk("line",{x1:L-5,y1:Y(v),x2:W-R,y2:Y(v),stroke:"var(--rule-soft)","stroke-width":1}));
+    const t=mk("text",{x:L-10,y:Y(v)+4,"text-anchor":"end",class:"st sm"});t.textContent=o.ylab?o.ylab(v):v.toFixed(1);svg.appendChild(t);}
+  for(let v=Math.ceil(x0);v<=x1;v++){ if((x1-x0)>14&&v%2) continue;
+    const t=mk("text",{x:X(v),y:H-B+18,"text-anchor":"middle",class:"st sm"});t.textContent=v;svg.appendChild(t);}
+  if(o.xtitle){const t=mk("text",{x:(L+W-R)/2,y:H-2,"text-anchor":"middle",class:"st sm"});t.textContent=o.xtitle;svg.appendChild(t);}
+  if(o.ref!=null&&o.ref>=y0&&o.ref<=y1){
+    svg.appendChild(mk("line",{x1:L,y1:Y(o.ref),x2:W-R,y2:Y(o.ref),stroke:"var(--amber)","stroke-width":1.5,"stroke-dasharray":"5 4"}));
+    const t=mk("text",{x:W-R,y:Y(o.ref)-6,"text-anchor":"end",class:"st sm"});t.style.fill="var(--amber)";t.textContent=o.refLabel||"";svg.appendChild(t);}
+  series.forEach(s=>{
+    const fin=s.pts.filter(p=>Number.isFinite(p[1]));
+    if(fin.length>1) svg.appendChild(mk("path",{d:fin.map((p,i)=>(i?"L":"M")+X(p[0])+" "+Y(p[1])).join(" "),
+      fill:"none",stroke:s.col||"var(--accent)","stroke-width":2,"stroke-linejoin":"round","stroke-linecap":"round"}));
+    s.pts.forEach(p=>{
+      const bad=!Number.isFinite(p[1]);
+      const g=mk("g");
+      g.appendChild(mk("circle",{cx:X(p[0]),cy:bad?T:Y(p[1]),r:10,fill:"transparent"}));
+      g.appendChild(mk("circle",{cx:X(p[0]),cy:bad?T:Y(p[1]),r:4.5,fill:bad?"var(--bad)":(s.col||"var(--accent)"),
+        stroke:"var(--panel)","stroke-width":1.8}));
+      bindTip(g,(s.name?"<b>"+s.name+"</b><br>":"")+(o.tip?o.tip(p):p[1]));
+      svg.appendChild(g);
+    });
+  });
+  host.replaceChildren(svg);
+}
+function matrixChart(host, H, formSet){
+  const N=H.length, W=560, cell=Math.min(26,(W-60)/N), S=cell*N;
+  const svg=mk("svg",{viewBox:"0 0 "+(S+56)+" "+(S+30)});
+  let mx=0; for(const r of H) for(const v of r) mx=Math.max(mx,Math.abs(v));
+  mx=mx||1;
+  for(let i=0;i<N;i++)for(let j=0;j<N;j++){
+    const v=H[i][j], a=Math.abs(v)/mx, isF=formSet.has(i+","+j);
+    const g=mk("g");
+    g.appendChild(mk("rect",{x:46+j*cell,y:4+i*cell,width:cell-1.5,height:cell-1.5,rx:2,
+      fill:v===0?"var(--sunk)":"var(--accent)","fill-opacity":v===0?1:(0.12+0.78*a)}));
+    if(isF) g.appendChild(mk("rect",{x:46+j*cell,y:4+i*cell,width:cell-1.5,height:cell-1.5,rx:2,
+      fill:"none",stroke:"var(--amber)","stroke-width":2}));
+    bindTip(g,"H["+i+"]["+j+"] = "+v.toFixed(3));
+    svg.appendChild(g);
+  }
+  if(N<=16) for(let i=0;i<N;i++){
+    const t=mk("text",{x:40,y:4+i*cell+cell*0.68,"text-anchor":"end",class:"st sm"});t.textContent=i;svg.appendChild(t);
+  }
+  host.replaceChildren(svg);
+}
+function mapChart(host, spec, map){
+  const n=map.length, W=660, H=Math.max(150, 34+n*22), L=76, R=72, T=14;
+  const svg=mk("svg",{viewBox:"0 0 "+W+" "+H});
+  const mx=Math.max(...map.map(Math.abs),1e-12), mid=L+(W-L-R)/2, half=(W-L-R)/2;
+  const sc=v=>mid+(v/(mx*1.08))*half, bh=14, rh=(H-T-20)/n;
+  svg.appendChild(mk("line",{x1:mid,y1:T-4,x2:mid,y2:H-20,stroke:"var(--rule)","stroke-width":1}));
+  spec.atoms.forEach((a,i)=>{
+    const y=T+i*rh+(rh-bh)/2, v=map[i], neg=v<0, col=neg?"var(--donate)":"var(--withdraw)";
+    const x=neg?sc(v):mid, w=Math.max(Math.abs(sc(v)-mid),1.5);
+    const g=mk("g");
+    g.appendChild(mk("rect",{x:L-6,y:T+i*rh,width:W-L-R+12,height:rh,fill:"transparent"}));
+    g.appendChild(mk("rect",{x:x,y:y,width:w,height:bh,fill:col,rx:3}));
+    svg.appendChild(g);
+    const t=mk("text",{x:L-12,y:y+bh/2+4,"text-anchor":"end",class:"st b"});t.textContent=a.name;svg.appendChild(t);
+    const ins=w>56;
+    const t2=mk("text",{x:ins?(neg?x+7:x+w-7):(neg?x-7:x+w+7),y:y+bh/2+4,
+      "text-anchor":ins?(neg?"start":"end"):(neg?"end":"start"),class:"st sm"});
+    if(ins){t2.style.fill="#fff";t2.style.fontWeight="600";}
+    t2.textContent=fmt(v); svg.appendChild(t2);
+    bindTip(g,"<b>"+a.name+"</b> · "+a.frag+"<br>lever "+fmt(v)+"<br>"+(v>0?"withdrawing":"donating"));
+  });
+  const l1=mk("text",{x:sc(-mx*0.55),y:H-6,"text-anchor":"middle",class:"st sm"});l1.style.fill="var(--donate)";l1.textContent="◀ donating";svg.appendChild(l1);
+  const l2=mk("text",{x:sc(mx*0.55),y:H-6,"text-anchor":"middle",class:"st sm"});l2.style.fill="var(--withdraw)";l2.textContent="withdrawing ▶";svg.appendChild(l2);
+  host.replaceChildren(svg);
+}
+
+/* ---------------- the run ---------------- */
+function imbalance(Co,form){const[[a,b],[c,d]]=form;let s=0;
+  for(let i=0;i<Co[0].length;i++)s+=2*(Co[a][i]*Co[b][i]-Co[c][i]*Co[d][i]);return s;}
+
+function compute(inp){
+  const spec=inp.spec, p={hO:inp.hO,kset:inp.kset};
+  const t0=performance.now();
+  const {H,no}=E.buildH(spec,inp.gamma,p), N=H.length;
+  const ex=E.exact(H,no,spec.form);
+  const fe=E.frontEnd(inp.fe,inp.analog,N);
+  const sp=E.sp2(H,no,fe);
+  const rf=E.refine(sp.X,H,no,spec.form,ex.map,{seed:inp.rseed,kmax:10,target:1e-5});
+  // A perfectly symmetric pair has a reference map of zeros, so the RELATIVE error target is
+  // undefined (0/0). Judge those runs on absolute error instead and label them as "no lever".
+  const refMax=Math.max(...ex.map.map(Math.abs));
+  const zeroRef=refMax<1e-9;
+  let ok=rf.reachedAt!==null, degenerate=false;
+  if(!ok&&zeroRef&&rf.last&&Math.max(...rf.last.map.map(Math.abs))<1e-8){ ok=true; degenerate=true; }
+  const refined=ok?rf.last:null;
+  const rows=ok?E.ruleTable(spec,inp.gamma,p,refined):null;
+  return {inp,spec,H,no,ex,sp,rf,ok,rows,p,N,degenerate,zeroRef,
+    ms:performance.now()-t0, gap:ex.e[no]-ex.e[no-1],
+    I:ok?imbalance(refined.Co,spec.form):null};
+}
+
+/* ---------------- EXPLORE ---------------- */
+const exState={sel:null,last:null};
+function exAnalog(){ return {adcBits:+$("e-adc").value, fitted:true, gain:0.0012, offset:0.0001,
+  noise:+$("e-noise").value, seed:1, wBits:8, dBits:8}; }
+function exFE(){ return document.querySelector('input[name="efe"]:checked').value; }
+function exInputs(){
+  const name=$("e-mol").value;
+  return {molecule:name, spec:PRESETS[name], gamma:+$("e-gamma").value, hO:+$("e-ho").value, kset:"std",
+    fe:exFE(), analog:exAnalog(), rseed:7};
+}
+function exHwInputs(){
+  const n=+$("e-size").value;
+  const spec = n<=8 ? PRESETS["butadiene + acrolein"] : E.chain(n/2, n/2, true);
+  return {molecule:n<=8?"butadiene + acrolein":"chain", spec, gamma:0.3, hO:1, kset:"std",
+    fe:exFE(), analog:exAnalog(), rseed:7};
+}
+function runExplore(){
+  $("e-gamma-v").textContent=(+$("e-gamma").value).toFixed(2);
+  $("e-ho-v").textContent=(+$("e-ho").value).toFixed(2);
+  $("e-adc-v").textContent=$("e-adc").value+" bits";
+  $("e-noise-v").textContent=(+$("e-noise").value).toExponential(0).replace("0e+0","0");
+  const isAn=document.querySelector('input[name="efe"]:checked').value==="analog";
+  $("e-noise").disabled=!isAn; $("e-adc").disabled=!isAn;
+  const hasO=PRESETS[$("e-mol").value].atoms.some(a=>a.t==="O=");
+  $("e-ho").closest("label").style.opacity=hasO?1:.42; $("e-ho").disabled=!hasO;
+
+  const L=compute(exInputs()); exState.last=L;
+  const map=L.ok?L.rf.last.map:null;
+  if(exState.sel!=null && exState.sel>=L.spec.atoms.length) exState.sel=null;
+
+  drawMolecule($("mol-ex"), L.spec, map, {sel:exState.sel, onPick:i=>{exState.sel=i;renderExplore();}});
+  renderExplore();
+
+  runHardware();
+}
+function runHardware(){
+  const K=compute(exHwInputs());
+  const hw=$("e-hw"); hw.replaceChildren();
+  hw.appendChild(el("span","pill "+(K.ok?"good":"bad"),
+    K.ok?"Converged":"Failed — no answer produced"));
+  const add=(k,v)=>{const s=el("span",null,k+" ");s.appendChild(el("b",null,v));hw.appendChild(s);};
+  add("atoms",String(K.N));
+  add("SP2 iterations",String(K.sp.iters));
+  add("exact refinement steps", K.ok?String(K.rf.reachedAt):"never reached");
+  add("final map error", K.rf.steps.length?expo(K.rf.steps[K.rf.steps.length-1].err):"—");
+  if(K.sp.diverged) hw.appendChild(el("span","pill bad","SP2 diverged"));
+  const an=K.inp.fe==="analog";
+  $("e-hw-note").textContent = K.ok
+    ? (an ? "Converging in "+K.rf.reachedAt+" step"+(K.rf.reachedAt===1?"":"s")+". Every step is four dense matrix products in exact float64 — that is the cost the analog front end has to earn back, and in this design it does not."
+          : "Exact and INT8 arithmetic both land inside the basin here.")
+    : "The front end landed too far out for the exact refinement to recover, so the pipeline reports failure rather than a plausible-looking table. This is the precision budget, found by hand.";
+}
+function renderExplore(){
+  const L=exState.last; if(!L) return;
+  const map=L.ok?L.rf.last.map:null;
+  drawMolecule($("mol-ex"), L.spec, map, {sel:exState.sel, onPick:i=>{exState.sel=i;renderExplore();}});
+  $("ex-async").textContent = L.ok ? "Asynchronicity I = "+fmt(L.I,4) : "";
+
+  const body=$("detail-body"); body.replaceChildren();
+  if(!L.ok){
+    body.appendChild(el("p",null,"The front end did not land close enough for the exact refinement to recover, so there is no rule table for this setting. Lower the read noise or widen the ADC."));
+    $("reqlist").replaceChildren();
+    $("e-chem-note").textContent="";
+    return;
+  }
+  const rows=L.rows, dead=rows.every(r=>r.sign===0);
+
+  if(exState.sel==null){
+    body.appendChild(el("p",null, dead
+      ? "This pair is the negative control: perfectly symmetric, so no atom has a lever. Every number below is zero to machine precision — the method is not inventing structure."
+      : "Click any atom in the diagram to see what a catalyst would have to do there."));
+  }else{
+    const r=rows[exState.sel];
+    body.appendChild(el("div","big", r.name));
+    body.appendChild(el("small",null, (r.frag==="diene"?"On the diene":"On the dienophile")+
+      (r.type==="C"?" · carbon":r.type==="O="?" · carbonyl oxygen":" · ether oxygen")));
+    if(r.sign===0){
+      body.appendChild(el("p",null,"No lever here — shifting this atom's energy does not move the asynchronicity."));
+    }else{
+      const d=el("div","dir"); d.style.color=r.sign>0?"var(--withdraw)":"var(--donate)";
+      d.textContent=r.sign>0?"Pull electrons away from this atom":"Push electrons towards this atom";
+      body.appendChild(d);
+      body.appendChild(el("p",null, r.env.replace(/^[a-z]+ \(/,"").replace(/\)$/,"")+
+        (r.reach==="directed binding"?". A group can actually be aimed at this lone pair.":". Only reachable through space, not by direct binding.")));
+      const dl=el("dl","kv");
+      const kv=(k,v)=>{dl.appendChild(el("dt",null,k));dl.appendChild(el("dd",null,v));};
+      kv("Lever", fmt(r.LA));
+      kv("Rank", r.rank+" of "+rows.filter(q=>q.frag===r.frag).length+" in its fragment");
+      kv("Sign stable", Math.round(r.robust*100)+"% of variants");
+      kv("Also binds", r.alsoBind?"yes — same sign on the energy lever":"no");
+      body.appendChild(dl);
+    }
+  }
+
+  const list=$("reqlist"); list.replaceChildren();
+  rows.slice().filter(r=>r.sign!==0).sort((a,b)=>Math.abs(b.LA)-Math.abs(a.LA)).slice(0,5).forEach(r=>{
+    const li=el("li", r.sign>0?"pos":"neg");
+    li.appendChild(el("span","nm",r.name));
+    li.appendChild(el("span",null,(r.sign>0?"withdrawing":"donating")+" · "+r.frag));
+    li.appendChild(el("span","nu",fmt(r.LA)));
+    li.onclick=()=>{exState.sel=r.k;renderExplore();};
+    list.appendChild(li);
+  });
+  if(dead) list.appendChild(el("li",null,"No levers — negative control."));
+
+  const O=rows.find(r=>r.type==="O="), OR=rows.find(r=>r.type==="OR");
+  let note="";
+  if(O) note+="Carbonyl O: "+(O.sign>0?"withdrawing":"donating")+", rank "+O.rank+" of "+rows.filter(q=>q.frag===O.frag).length+" in the dienophile. ";
+  if(OR) note+="Ether O on the diene: "+(OR.sign>0?"withdrawing":"donating")+" — the opposite requirement, as the chemistry demands. ";
+  if(dead) note="All-carbon symmetric pair: no lever anywhere.";
+  $("e-chem-note").textContent=note;
+}
+
+/* ---------------- INSTRUMENT ---------------- */
+function insInputs(){
+  const molecule=$("molecule").value;
+  const spec = molecule==="chain" ? E.chain(+$("ld").value,+$("le").value,$("endo").checked) : PRESETS[molecule];
+  const fe=document.querySelector('input[name="fe"]:checked').value;
+  return {molecule, spec, gamma:+$("gamma").value, hO:+$("ho").value, kset:$("kset").value, fe,
+    analog:{adcBits:+$("adc").value, fitted:$("range").value==="fitted", gain:+$("gain").value/100,
+      offset:+$("offset").value, noise:+$("noise").value, seed:+$("chip").value, wBits:8, dBits:8},
+    rseed:+$("rseed").value};
+}
+function syncIns(){
+  $("gamma-v").textContent=(+$("gamma").value).toFixed(2);
+  $("ho-v").textContent=(+$("ho").value).toFixed(2);
+  $("ld-v").textContent=$("ld").value; $("le-v").textContent=$("le").value;
+  $("adc-v").textContent=$("adc").value+" bits";
+  $("gain-v").textContent=(+$("gain").value).toFixed(2)+"%";
+  $("offset-v").textContent=(+$("offset").value).toExponential(0).replace("0e+0","0");
+  $("noise-v").textContent=(+$("noise").value).toExponential(0).replace("0e+0","0");
+  $("chain-opts").hidden=$("molecule").value!=="chain";
+  $("analog-opts").hidden=document.querySelector('input[name="fe"]:checked').value!=="analog";
+  const spec=$("molecule").value==="chain"?E.chain(+$("ld").value,+$("le").value,$("endo").checked):PRESETS[$("molecule").value];
+  $("ho-row").hidden=!spec.atoms.some(a=>a.t==="O=");
+}
+const FE_NAME={fp64:"float64 (exact digital)",fp32:"float32",fp16pair:"FP16-pair, FP32 accumulate",int8:"INT8 digital",analog:"Analog array (behavioural model)"};
+function runInstrument(){
+  syncIns();
+  const L=compute(insInputs());
+  const st=$("status");
+  st.className="pill "+(L.ok?"good":"bad");
+  st.textContent=L.degenerate?"No lever — symmetric control":
+    (L.ok?("Converged in "+L.rf.reachedAt+" refinement step"+(L.rf.reachedAt===1?"":"s")):"Did not reach 1e−5");
+
+  const meta=$("meta"); meta.replaceChildren();
+  const add=(k,v)=>{const s=el("span",null,k+" ");s.appendChild(el("b",null,v));meta.appendChild(s);};
+  add("N",String(L.N)); add("occupied",String(L.no));
+  add("front end",FE_NAME[L.inp.fe]);
+  add("HOMO–LUMO gap",L.gap.toFixed(4));
+  if(L.I!=null) add("I",fmt(L.I));
+  add("SP2 iters",String(L.sp.iters));
+  add("time",L.ms.toFixed(0)+" ms");
+  if(L.sp.diverged) meta.appendChild(el("span","pill bad","SP2 diverged"));
+
+  // 01 molecule
+  drawMolecule($("mol-in"), L.spec, L.ok?L.rf.last.map:null, {});
+  $("mol-note").textContent=L.spec.atoms.length+" π centres, "+L.spec.bonds.length+
+    " bonds, 2 forming bonds at γ = "+L.inp.gamma.toFixed(2)+".";
+
+  // 02 matrix
+  const fs=new Set(); L.spec.form.forEach(([i,j])=>{fs.add(i+","+j);fs.add(j+","+i);});
+  matrixChart($("matrix"), L.H, fs);
+  const [lo,hi]=E.gershgorin(L.H);
+  $("matrix-note").textContent="Gershgorin bounds ["+lo.toFixed(2)+", "+hi.toFixed(2)+"], used to initialise SP2.";
+
+  // 03 sp2
+  const hist=L.sp.hist.map((v,i)=>[i+1, Math.log10(Math.max(v,1e-18))]);
+  const hv=hist.map(p=>p[1]), hlo=hist.length?Math.floor(Math.min(...hv))-1:-18, hhi=hist.length?Math.ceil(Math.max(...hv))+1:1;
+  lineChart($("sp2"), [{pts:hist,col:"var(--accent)",name:"idempotency error"}],
+    {ymin:hlo,ymax:hhi,yticks:Math.min(5,Math.max(2,hhi-hlo)),ylab:v=>"1e"+v.toFixed(0),xtitle:"SP2 iteration",
+     tip:p=>"iteration "+p[0]+"<br>error 1e"+p[1].toFixed(1)});
+  const fl=L.sp.hist.length?L.sp.hist[L.sp.hist.length-1]:NaN;
+  $("sp2-note").textContent=L.sp.diverged?"Diverged — the guard stopped it.":
+    ("Stopped after "+L.sp.iters+" iterations at an idempotency floor of "+expo(fl)+".");
+
+  // 04 refinement
+  const pts=L.rf.steps.map(s=>[s.k, Number.isFinite(s.err)?Math.log10(Math.max(s.err,1e-18)):NaN]);
+  lineChart($("refine"), [{pts,col:"var(--accent)",name:"map relative error"}],
+    {ymin:Math.min(-6,Math.floor(Math.min(...pts.map(p=>p[1]).filter(Number.isFinite)))-1),
+     ymax:Math.max(-4,Math.ceil(Math.max(...pts.map(p=>p[1]).filter(Number.isFinite)))+1),
+     yticks:4,ylab:v=>"1e"+v.toFixed(0),xtitle:"Ogita–Aishima step k",ref:-5,refLabel:"target 1e−5",
+     tip:p=>Number.isFinite(p[1])?("step "+p[0]+"<br>error 1e"+p[1].toFixed(1)):("step "+p[0]+"<br>diverged")});
+  $("refine-note").textContent=L.degenerate
+    ? "Every sensitivity is zero to machine precision, so the relative-error target is undefined (0/0). Judged on absolute error instead: below 1e−8 at every step."
+    : (L.ok ? "Reached the 1e−5 target at step "+L.rf.reachedAt+"."
+            : "Never reached 1e−5 within "+(L.rf.steps.length-1)+" steps; the rule table is withheld.");
+
+  // 05 map + 06 table
+  if(L.ok){
+    mapChart($("map"), L.spec, L.rf.last.map);
+    const mx=Math.max(...L.rf.last.map.map(Math.abs));
+    $("map-note").textContent= mx<1e-9
+      ? "All levers zero to machine precision — the symmetric negative control."
+      : "Largest lever "+fmt(mx)+" at "+L.spec.atoms[L.rf.last.map.findIndex(v=>Math.abs(v)===mx)].name+".";
+    buildTable(L);
+  }else{
+    $("map").replaceChildren(el("p","note","No converged solution, so no sensitivity map."));
+    $("map-note").textContent="";
+    $("table").replaceChildren(el("p","note","No converged solution, so no rule table."));
+  }
+  $("report").value=makeReport(L);
+  window.__last=L;
+}
+function buildTable(L){
+  const t=el("table"),th=el("thead"),tb=el("tbody");
+  const hr=el("tr");
+  ["Fragment","Atom","Lever L_A","Rank","Requirement","Reach","Sign stable"].forEach((h,i)=>{
+    const c=el("th",i===2||i===3||i===6?"n":null,h); hr.appendChild(c);});
+  th.appendChild(hr);t.appendChild(th);
+  L.rows.slice().sort((a,b)=>a.frag===b.frag?Math.abs(b.LA)-Math.abs(a.LA):(a.frag<b.frag?-1:1)).forEach(r=>{
+    const tr=el("tr");
+    tr.appendChild(el("td",null,r.frag));
+    const nm=el("td"); const sw=el("span","sw");
+    sw.style.background=r.sign===0?"var(--rule)":(r.sign>0?"var(--withdraw)":"var(--donate)");
+    nm.appendChild(sw); nm.appendChild(document.createTextNode(r.name)); tr.appendChild(nm);
+    tr.appendChild(el("td","n",fmt(r.LA)));
+    tr.appendChild(el("td","n",String(r.rank)));
+    tr.appendChild(el("td",null,r.env));
+    tr.appendChild(el("td",null,r.reach));
+    tr.appendChild(el("td","n",Math.round(r.robust*100)+"%"));
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb);
+  $("table").replaceChildren(t);
+}
+function makeReport(L){
+  const i=L.inp, lines=[];
+  lines.push("CATALYST REQUIREMENT REPORT");
+  lines.push("pair          : "+i.molecule+(i.molecule==="chain"?" (LD="+$("ld").value+", LE="+$("le").value+")":""));
+  lines.push("N / occupied  : "+L.N+" / "+L.no);
+  lines.push("gamma, h_O    : "+i.gamma.toFixed(2)+", "+i.hO.toFixed(2)+"   bond set: "+i.kset);
+  lines.push("front end     : "+FE_NAME[i.fe]);
+  if(i.fe==="analog") lines.push("analog        : ADC "+i.analog.adcBits+" bit, "+($("range")?$("range").value:"fitted")+
+    " range, gain "+(i.analog.gain*100).toFixed(2)+"%, offset "+expo(i.analog.offset)+", noise "+expo(i.analog.noise)+", chip "+i.analog.seed);
+  lines.push("refine seed   : "+i.rseed);
+  lines.push("HOMO-LUMO gap : "+L.gap.toFixed(4));
+  lines.push("SP2 iters     : "+L.sp.iters+(L.sp.diverged?"  (DIVERGED)":""));
+  lines.push("converged     : "+(L.ok?("yes, at step "+L.rf.reachedAt):"NO - target 1e-5 not reached"));
+  if(L.I!=null) lines.push("asynchronicity: I = "+fmt(L.I));
+  lines.push("");
+  if(L.ok){
+    lines.push("RULE TABLE");
+    lines.push("frag        atom   L_A        rank  stable  requirement");
+    L.rows.slice().sort((a,b)=>a.frag===b.frag?Math.abs(b.LA)-Math.abs(a.LA):(a.frag<b.frag?-1:1)).forEach(r=>{
+      lines.push(r.frag.padEnd(12)+r.name.padEnd(7)+fmt(r.LA).padEnd(11)+String(r.rank).padEnd(6)+
+        (Math.round(r.robust*100)+"%").padEnd(8)+r.env);
+    });
+  }else{
+    lines.push("No rule table: the front end did not land inside the basin of the exact refinement.");
+  }
+  lines.push("");
+  lines.push("Simulated hardware only. Offset and noise levels are placeholders, not device measurements.");
+  lines.push("No energy advantage is claimed. Asynchronicity was chosen as the primary lever post-hoc.");
+  return lines.join("\n");
+}
+function say(msg){const s=$("copy-say");s.textContent=msg;s.hidden=false;setTimeout(()=>{s.hidden=true;},1600);}
+async function copyText(txt,msg){
+  try{ await navigator.clipboard.writeText(txt); say(msg); }
+  catch(e){ const ta=$("report"); ta.select(); say("Press Ctrl/Cmd+C"); }
+}
+$("copy-md").onclick=()=>copyText($("report").value,"Report copied");
+$("copy-json").onclick=()=>{
+  const L=window.__last; if(!L) return;
+  copyText(JSON.stringify({input:{molecule:L.inp.molecule,gamma:L.inp.gamma,hO:L.inp.hO,kset:L.inp.kset,
+    frontEnd:L.inp.fe,analog:L.inp.fe==="analog"?L.inp.analog:null,refineSeed:L.inp.rseed},
+    N:L.N,occupied:L.no,gap:L.gap,converged:L.ok,refinementSteps:L.rf.reachedAt,
+    asynchronicity:L.I,
+    rows:L.ok?L.rows.map(r=>({atom:r.name,fragment:r.frag,LA:r.LA,rank:r.rank,robust:r.robust,requirement:r.env,reach:r.reach})):null,
+    disclaimers:["simulated hardware only","offset and noise are placeholders","no energy advantage claimed","asynchronicity lever chosen post-hoc"]
+  },null,2),"JSON copied");
+};
+
+/* ---------------- CANDIDATES ---------------- */
+const CSPEC=PRESETS["butadiene + acrolein"];
+function cSolve(hO,gamma){
+  const {H,no}=E.buildH(CSPEC,gamma==null?0.3:gamma,{hO,kset:"std"});
+  const x=E.exact(H,no,CSPEC.form), Co=x.Co, [[a,b],[c,d]]=CSPEC.form;
+  let p1=0,p2=0; for(let i=0;i<Co[0].length;i++){p1+=2*Co[a][i]*Co[b][i];p2+=2*Co[c][i]*Co[d][i];}
+  return {I:p1-p2, gap:x.e[no]-x.e[no-1], lev:x.map[7]};
+}
+let cCurve=null;
+function cBuildCurve(){
+  if(cCurve) return cCurve;
+  cCurve=[]; for(let h=0;h<=3.0001;h+=0.05){const r=cSolve(h);cCurve.push({h,I:r.I,gap:r.gap,lev:r.lev});}
+  return cCurve;
+}
+function miniChart(host,curve,key,o){
+  const W=300,H=182,L=52,R=14,T=42,B=34;
+  const svg=mk("svg",{viewBox:"0 0 "+W+" "+H});
+  const vs=curve.map(p=>p[key]);
+  let y0=Math.min(...vs), y1=Math.max(...vs); const pad=(y1-y0)*0.12||0.01; y0-=pad; y1+=pad;
+  const X=h=>L+(h/3)*(W-L-R), Y=v=>H-B-((v-y0)/(y1-y0))*(H-B-T);
+  const tt=mk("text",{x:L-46,y:13,class:"st b"}); tt.textContent=o.title; svg.appendChild(tt);
+  [y0,(y0+y1)/2,y1].forEach(v=>{
+    svg.appendChild(mk("line",{x1:L-5,y1:Y(v),x2:W-R,y2:Y(v),stroke:"var(--rule-soft)","stroke-width":1}));
+    const t=mk("text",{x:L-9,y:Y(v)+4,"text-anchor":"end",class:"st sm"});t.textContent=o.fmt(v);svg.appendChild(t);});
+  [0,1,2,3].forEach(h=>{const t=mk("text",{x:X(h),y:H-B+17,"text-anchor":"middle",class:"st sm"});t.textContent=h;svg.appendChild(t);});
+  const xt=mk("text",{x:(L+W-R)/2,y:H-4,"text-anchor":"middle",class:"st sm"});xt.textContent="h_O";svg.appendChild(xt);
+  svg.appendChild(mk("path",{d:curve.map((p,i)=>(i?"L":"M")+X(p.h)+" "+Y(p[key])).join(" "),
+    fill:"none",stroke:o.col,"stroke-width":2,"stroke-linejoin":"round"}));
+  // marker for plain acrolein
+  svg.appendChild(mk("line",{x1:X(1),y1:T-6,x2:X(1),y2:H-B,stroke:"var(--ink-3)","stroke-width":1,"stroke-dasharray":"3 3"}));
+  const la=mk("text",{x:X(1),y:T-9,"text-anchor":"middle",class:"st sm"});la.textContent="acrolein";svg.appendChild(la);
+  if(o.peak!=null){
+    svg.appendChild(mk("circle",{cx:X(o.peak.h),cy:Y(o.peak[key]),r:5,fill:o.col,stroke:"var(--panel)","stroke-width":2}));
+    const pt=mk("text",{x:X(o.peak.h)+8,y:Y(o.peak[key])-7,class:"st sm"});pt.style.fill=o.col;
+    pt.textContent="peak "+o.peak.h.toFixed(2);svg.appendChild(pt);
+  }
+  const cur=o.cur;
+  if(cur!=null){
+    const p=curve.reduce((a,b)=>Math.abs(b.h-cur)<Math.abs(a.h-cur)?b:a);
+    svg.appendChild(mk("circle",{cx:X(p.h),cy:Y(p[key]),r:4.5,fill:"var(--ink)",stroke:"var(--panel)","stroke-width":2}));
+  }
+  host.replaceChildren(svg);
+}
+function runCandidates(){
+  drawStructures();
+  const curve=cBuildCurve();
+  const hO=+$("c-ho").value;
+  $("c-ho-v").textContent=hO.toFixed(2);
+  const now=cSolve(hO), base=cSolve(1);
+
+  // reach chart (fixed at the published setting)
+  const {H,no}=E.buildH(CSPEC,0.3,{hO:1,kset:"std"});
+  const ex=E.exact(H,no,CSPEC.form);
+  const fe=E.frontEnd("fp64",{},H.length), sp=E.sp2(H,no,fe);
+  const rf=E.refine(sp.X,H,no,CSPEC.form,ex.map,{seed:7,kmax:10,target:1e-5});
+  const rows=E.ruleTable(CSPEC,0.3,{hO:1,kset:"std"},rf.last);
+  drawReach($("reach-chart"),rows);
+  const sorted=rows.slice().sort((a,b)=>Math.abs(b.LA)-Math.abs(a.LA));
+  const top=sorted[0], bind=sorted.find(r=>r.reach==="directed binding");
+  $("r-top").textContent=top.name+"  "+fmt(top.LA);
+  $("r-bind").textContent=bind.name+"  "+fmt(bind.LA);
+  $("r-bind-n").textContent=bind.env.replace(/^[a-z]+ \(/,"").replace(/\)$/,"");
+  const bindRank=sorted.findIndex(r=>r===bind)+1;
+  const ord=n=>n+(["th","st","nd","rd"][(n%100-n%10!=10)*(n%10<4)*(n%10)]||"th");
+  $("reach-note").textContent="Of "+rows.length+" atoms, "+rows.filter(r=>r.reach==="directed binding").length+
+    " can be bound directly. The carbonyl oxygen is "+ord(bindRank)+
+    " by raw magnitude but first among atoms a catalyst can be attached to.";
+
+  // stats
+  const st=$("c-stats"); st.replaceChildren();
+  const card=(l,v,n)=>{const d=el("div","stat");d.appendChild(el("div","sl",l));
+    d.appendChild(el("div","sv",v));if(n)d.appendChild(el("div","sn",n));st.appendChild(d);};
+  card("Asynchronicity I", fmt(now.I),
+    hO===1?"plain acrolein, uncatalysed":((now.I/base.I>=1?"×"+(now.I/base.I).toFixed(2):"×"+(now.I/base.I).toFixed(2))+" versus uncatalysed"));
+  card("HOMO–LUMO gap", now.gap.toFixed(4), (now.gap-base.gap>=0?"+":"")+(now.gap-base.gap).toFixed(4)+" versus uncatalysed");
+  card("Marginal lever at O", fmt(now.lev), "how much more you get per extra unit of pull");
+
+  let peak=curve[0]; curve.forEach(p=>{if(p.lev>peak.lev)peak=p;});
+  miniChart($("c-chart-I"),curve,"I",{title:"Asynchronicity rises",col:"var(--withdraw)",fmt:v=>v.toFixed(3),cur:hO});
+  miniChart($("c-chart-gap"),curve,"gap",{title:"HOMO–LUMO gap falls",col:"var(--donate)",fmt:v=>v.toFixed(2),cur:hO});
+  miniChart($("c-chart-lev"),curve,"lev",{title:"But the marginal lever peaks",col:"var(--amber)",fmt:v=>v.toFixed(3),cur:hO,peak:peak});
+  $("c-note").textContent="Pulling harder always makes the reaction more asynchronous and always narrows the gap. "+
+    "What does not keep improving is the marginal return: the lever at the oxygen peaks near h_O = "+peak.h.toFixed(2)+
+    " and declines after it. That peak sits within 0.02 of the same place for every coupling γ from 0.1 to 0.7, so it is not an artefact of where the reaction is sampled.";
+}
+function drawReach(host,rows){
+  const sorted=rows.slice().sort((a,b)=>Math.abs(b.LA)-Math.abs(a.LA));
+  const n=sorted.length,W=660,H=28+n*30,L=78,R=168,T=18;
+  const svg=mk("svg",{viewBox:"0 0 "+W+" "+H});
+  const mx=Math.max(...sorted.map(r=>Math.abs(r.LA)))||1;
+  const defs=mk("defs");
+  const pat=mk("pattern",{id:"hatch",width:7,height:7,patternUnits:"userSpaceOnUse",patternTransform:"rotate(45)"});
+  pat.appendChild(mk("rect",{width:7,height:7,fill:"var(--ink-3)","fill-opacity":.13}));
+  pat.appendChild(mk("line",{x1:0,y1:0,x2:0,y2:7,stroke:"var(--ink-3)","stroke-width":2.5,"stroke-opacity":.3}));
+  defs.appendChild(pat); svg.appendChild(defs);
+  sorted.forEach((r,i)=>{
+    const y=T+i*30, bh=16, w=Math.max(Math.abs(r.LA)/mx*(W-L-R),2);
+    const can=r.reach==="directed binding";
+    const col=r.LA>0?"var(--withdraw)":"var(--donate)";
+    const g=mk("g");
+    g.appendChild(mk("rect",{x:L-6,y:y-5,width:W-L+6,height:26,fill:"transparent"}));
+    g.appendChild(mk("rect",{x:L,y:y,width:w,height:bh,rx:4,fill:can?col:"url(#hatch)"}));
+    if(!can) g.appendChild(mk("rect",{x:L,y:y,width:w,height:bh,rx:4,fill:"none",stroke:col,"stroke-width":1.2,"stroke-opacity":.45}));
+    svg.appendChild(g);
+    const nm=mk("text",{x:L-12,y:y+bh/2+4,"text-anchor":"end",class:"st b"});
+    if(!can) nm.style.fill="var(--ink-3)";
+    nm.textContent=r.name; svg.appendChild(nm);
+    const ins=w>330;
+    const vl=mk("text",{x:ins?L+w-9:L+w+9,y:y+bh/2+4,"text-anchor":ins?"end":"start",class:"st sm"});
+    if(ins&&can){vl.style.fill="#fff";vl.style.fontWeight="600";}
+    vl.textContent=fmt(r.LA); svg.appendChild(vl);
+    const tag=mk("text",{x:W-6,y:y+bh/2+4,"text-anchor":"end",class:"st sm"});
+    if(can){tag.style.fill=col;tag.style.fontWeight="600";tag.textContent="can be bound directly";}
+    else tag.textContent="through space only";
+    svg.appendChild(tag);
+    bindTip(g,"<b>"+r.name+"</b> · "+r.frag+"<br>lever "+fmt(r.LA)+"<br>"+r.env+"<br>"+r.reach);
+  });
+  host.replaceChildren(svg);
+}
+$("c-ho").addEventListener("input",()=>debounce(runCandidates));
+
+/* ---------------- catalyst structure drawings ----------------
+   Skeletal convention: vertices are carbons, heteroatoms are labelled.
+   Every drawing shows the SAME acrolein enal fragment Cb=Ca-Cc=O so the
+   binding site the model picked is the fixed point of the comparison. */
+function sAtom(svg,x,y,txt,col){
+  const w=txt.length*7.2+9;
+  svg.appendChild(mk("rect",{x:x-w/2,y:y-9,width:w,height:18,fill:"var(--panel)"}));
+  const t=mk("text",{x:x,y:y+5,"text-anchor":"middle",class:"st b"});
+  t.style.fontSize="13px"; if(col)t.style.fill=col; t.textContent=txt; svg.appendChild(t);
+}
+function sBond(svg,x1,y1,x2,y2,o){
+  o=o||{};
+  const col=o.col||"var(--ink)", sw=o.w||1.8;
+  const a={x2:x2,y2:y2,x1:x1,y1:y1,stroke:col,"stroke-width":sw,"stroke-linecap":"round"};
+  if(o.dash) a["stroke-dasharray"]=o.dash;
+  svg.appendChild(mk("line",a));
+  if(o.double){
+    const dx=x2-x1,dy=y2-y1,L=Math.hypot(dx,dy)||1,ox=-dy/L*4,oy=dx/L*4;
+    svg.appendChild(mk("line",{x1:x1+ox+dx*.18,y1:y1+oy+dy*.18,x2:x2+ox-dx*.18,y2:y2+oy-dy*.18,
+      stroke:col,"stroke-width":sw,"stroke-linecap":"round"}));
+  }
+}
+function enal(svg,ox,oy){
+  // Cb = Ca - Cc = O  (acrolein), O placed at (ox,oy)
+  const Cc=[ox-38,oy+22], Ca=[ox-76,oy], Cb=[ox-114,oy+22];
+  sBond(svg,Cb[0],Cb[1],Ca[0],Ca[1],{double:true});
+  sBond(svg,Ca[0],Ca[1],Cc[0],Cc[1]);
+  sBond(svg,Cc[0],Cc[1],ox,oy,{double:true});
+  sAtom(svg,ox,oy,"O","var(--withdraw)");
+  const l=mk("text",{x:Cb[0]-4,y:Cb[1]+20,"text-anchor":"middle",class:"st sm"});
+  l.textContent="acrolein"; svg.appendChild(l);
+  return {Cc,Ca,Cb};
+}
+function structure(hostId,kind){
+  const host=$(hostId); if(!host) return;
+  const W=330,H=kind==="hbond"?172:158;
+  const lewisCap="The oxygen lone pair donates into the metal. BF₃, TiCl₄, ZnCl₂ and Li⁺ bind the same way.";
+  const protCap="DA_20_00 aims one hydrogen-bond donor at this oxygen; SpnF uses a threonine hydroxyl instead.";
+  const svg=mk("svg",{viewBox:"0 0 "+W+" "+H,role:"img"});
+  const ox=152, oy=kind==="hbond"?92:62;
+  enal(svg,ox,oy);
+  let cap="";
+
+  if(kind==="lewis"){
+    const Al=[230,46];
+    sBond(svg,ox+13,oy-5,Al[0]-14,Al[1]+7,{dash:"5 4",col:"var(--donate)",w:2.2});
+    const cl=[[230,10],[278,66],[244,100]];
+    cl.forEach(c=>{ sBond(svg,Al[0],Al[1],c[0],c[1]); });
+    sAtom(svg,Al[0],Al[1],"Al","var(--donate)");
+    cl.forEach(c=>{ sAtom(svg,c[0],c[1],"Cl"); });
+    const dl=mk("text",{x:186,y:36,"text-anchor":"middle",class:"st sm"});
+    dl.style.fill="var(--donate)"; dl.textContent="dative"; svg.appendChild(dl);
+    cap=lewisCap;
+  }
+  if(kind==="hbond"){
+    const N1=[222,56], N2=[222,128], C=[268,92], S=[310,92];
+    sBond(svg,N1[0],N1[1],C[0],C[1]); sBond(svg,N2[0],N2[1],C[0],C[1]);
+    sBond(svg,C[0],C[1],S[0],S[1],{double:true});
+    sAtom(svg,N1[0],N1[1],"N"); sAtom(svg,N2[0],N2[1],"N"); sAtom(svg,S[0],S[1],"S","var(--amber)");
+    const H1=[192,68], H2=[192,116];
+    sAtom(svg,H1[0],H1[1],"H"); sAtom(svg,H2[0],H2[1],"H");
+    sBond(svg,N1[0]-8,N1[1]+3,H1[0]+6,H1[1]-3); sBond(svg,N2[0]-8,N2[1]-3,H2[0]+6,H2[1]+3);
+    sBond(svg,H1[0]-8,H1[1]+1,ox+8,oy-4,{dash:"3 4",col:"var(--withdraw)",w:1.8});
+    sBond(svg,H2[0]-8,H2[1]-1,ox+8,oy+4,{dash:"3 4",col:"var(--withdraw)",w:1.8});
+    const ar=mk("text",{x:270,y:150,"text-anchor":"middle",class:"st sm"});
+    ar.textContent="N-aryl groups omitted"; svg.appendChild(ar);
+    cap="Two N–H bonds clamp the same oxygen. Schreiner's thiourea carries 3,5-(CF₃)₂-phenyl on each nitrogen.";
+  }
+  if(kind==="iminium"){
+    // redraw: the C=O is replaced by C=N+
+    svg.replaceChildren();
+    const Cc=[ox-38,oy+22], Ca=[ox-76,oy], Cb=[ox-114,oy+22];
+    sBond(svg,Cb[0],Cb[1],Ca[0],Ca[1],{double:true});
+    sBond(svg,Ca[0],Ca[1],Cc[0],Cc[1]);
+    sBond(svg,Cc[0],Cc[1],ox,oy,{double:true,col:"var(--amber)",w:2.2});
+    sAtom(svg,ox,oy,"N⁺","var(--amber)");
+    sBond(svg,ox+10,oy-6,ox+42,oy-24); sBond(svg,ox+10,oy+6,ox+42,oy+22);
+    const r1=mk("text",{x:ox+56,y:oy-20,class:"st sm"}); r1.textContent="chiral"; svg.appendChild(r1);
+    const r2=mk("text",{x:ox+56,y:oy-6,class:"st sm"}); r2.textContent="imidazolidinone"; svg.appendChild(r2);
+    const l=mk("text",{x:Cb[0]-4,y:Cb[1]+20,"text-anchor":"middle",class:"st sm"});
+    l.textContent="acrolein"; svg.appendChild(l);
+    const warn=mk("text",{x:W/2,y:H-16,"text-anchor":"middle",class:"st sm"});
+    warn.style.fill="var(--withdraw)"; warn.textContent="the oxygen is gone — a different molecule";
+    svg.appendChild(warn);
+    cap="Condensation replaces C=O with C=N⁺. Nothing in our model can represent that step.";
+  }
+  if(kind==="protein"){
+    const Hx=[196,42], N=[232,30], Cg=[268,48];
+    sBond(svg,Hx[0]+7,Hx[1]-2,ox+9,oy-7,{dash:"3 4",col:"var(--withdraw)",w:1.8});
+    sBond(svg,N[0]-9,N[1]+5,Hx[0]+8,Hx[1]-3);
+    sBond(svg,N[0]+9,N[1]+4,Cg[0]-7,Cg[1]-4);
+    sBond(svg,Cg[0],Cg[1],Cg[0]+6,Cg[1]-34,{double:true});
+    sAtom(svg,Hx[0],Hx[1],"H"); sAtom(svg,N[0],N[1],"N");
+    sAtom(svg,Cg[0]+6,Cg[1]-34,"O","var(--withdraw)");
+    sBond(svg,Cg[0]+8,Cg[1]+6,Cg[0]+32,Cg[1]+24,{dash:"2 5",w:1.6,col:"var(--ink-3)"});
+    const r=mk("text",{x:Cg[0]+38,y:Cg[1]+32,class:"st sm"});
+    r.textContent="backbone"; svg.appendChild(r);
+    const r2=mk("text",{x:190,y:12,"text-anchor":"middle",class:"st sm"});
+    r2.textContent="Gln side chain"; svg.appendChild(r2);
+    cap=protCap;
+  }
+  const wrap=document.createElement("div");
+  const c=el("div","cap",cap);
+  wrap.appendChild(svg); wrap.appendChild(c);
+  host.replaceChildren(wrap);
+}
+function drawStructures(){
+  structure("st-lewis","lewis"); structure("st-hbond","hbond");
+  structure("st-iminium","iminium"); structure("st-protein","protein");
+}
+
+/* ---------------- wiring ---------------- */
+let timer=null;
+function debounce(fn){ clearTimeout(timer); timer=setTimeout(fn,90); }
+["e-mol","e-gamma","e-ho","e-noise","e-adc","e-size"].forEach(id=>{
+  $(id).addEventListener("input",()=>debounce(runExplore));
+  $(id).addEventListener("change",()=>debounce(runExplore));
+});
+document.querySelectorAll('input[name="efe"]').forEach(r=>r.addEventListener("change",()=>{exState.sel=exState.sel;debounce(runExplore);}));
+$("e-mol").addEventListener("change",()=>{exState.sel=null;});
+
+$("controls").addEventListener("input",()=>debounce(runInstrument));
+$("controls").addEventListener("change",()=>debounce(runInstrument));
+
+const views={exp:$("view-explore"),can:$("view-cand"),ins:$("view-inst")},
+      btns={exp:$("b-exp"),can:$("b-can"),ins:$("b-ins")},
+      runners={exp:runExplore,can:runCandidates,ins:runInstrument};
+let started={exp:false,can:false,ins:false};
+function show(name){
+  if(!views[name]) name="exp";
+  for(const k in views){views[k].hidden=(k!==name);btns[k].setAttribute("aria-current",String(k===name));}
+  if(!started[name]){ runners[name](); started[name]=true; }
+  const h="#"+({exp:"explore",can:"candidates",ins:"instrument"})[name];
+  if(location.hash!==h) history.replaceState(null,"",h);
+}
+btns.exp.onclick=()=>show("exp"); btns.can.onclick=()=>show("can"); btns.ins.onclick=()=>show("ins");
+const byHash=()=>({"#instrument":"ins","#candidates":"can","#explore":"exp"})[location.hash]||"exp";
+addEventListener("hashchange",()=>show(byHash()));
+show(byHash());
+})();
+</script>
+</body>
+</html>

@@ -2,3 +2,5 @@ ident.json
 __pycache__/
 *.pyc
 dataset.csv
+cataline/
+logs/

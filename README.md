@@ -1,55 +1,58 @@
-# MolMAC
+# Catalyst Precision (MolMAC branch `cataline`)
 
-A hybrid analog-digital multiply-accumulate (MAC) array, simulated end to end, that finds the π-electron energies of small molecules under the Hückel model. The analog array does the matrix-vector products. Digital logic handles power iteration, deflation and refinement.
+**How much numerical precision does a cheap or analog chip need to help design catalysts?**
 
-Layers: a behavioral **Python** model, **LTspice** checks of settling and ripple, **Verilog** control logic verified against the Python trace, and a browser **dashboard** that replays a run.
+This project takes a simple quantum-chemistry model of a Diels-Alder reaction (a diene meeting a
+dienophile), solves it first on a deliberately imprecise "front end", finishes the job with an exact
+digital step, and measures how rough the front end is allowed to be. From the result it produces a short
+table of what an ideal catalyst would need to do at each atom.
 
-> **Limits:** a classical simulation of a toy Hamiltonian, not quantum hardware and not chemical accuracy. Offset and noise magnitudes are placeholders; only the 1.7% gain mismatch comes from the paper. The Python model treats all rows as parallel analog nodes, while the Verilog FSM drives one tile at a time.
+It lives in the `catalyst/` folder and extends MolMAC, an analog-array approach to molecular energy
+calculations. Nothing outside this folder is changed. The original MolMAC README is kept as [README_MolMAC.md](README_MolMAC.md).
 
-## Requirements
-- Python 3 with `numpy`
-- Vivado (XSim) for the Verilog tests, optional
-- LTspice for the SPICE checks, optional
+## What we found
 
-## Quick start
-```powershell
-python mol_engine.py benzene        # runs the model, writes dashboard.html
+- The imprecise front end is **necessary**: starting the exact step from scratch fails in nearly every run.
+- The precision it needs **grows with molecule size**. Over 8 to 64 π-electron centres, a digital integer
+  front end needs 8 to 12 bits, and a modelled analog chip needs 10 to 14 bits.
+- **Read noise** is the error source that limits the design most.
+- **No energy saving.** The exact finishing step costs about as much as solving the problem directly,
+  so this design is a precision study, not an efficiency claim.
+- We do not claim that analog hardware is required for this problem.
+
+## Try it
+
+Open `catalyst/frontend/catalyst_pipeline.html` in a browser. It walks through molecule, processing, ideal-catalyst
+characteristics, and a readable output. No install needed.
+
+To run the Python code:
+
 ```
-Molecules: `ethylene`, `butadiene`, `benzene`, `naphthalene`. Open `dashboard.html` in a browser. It has three tabs: the simulation replay, a guide with the run summary, and a prototype build plan. There is a dark/light toggle.
-
-After running, a new file dashboard.html will be generated. Open it to see the interactive dashboard.
-
-## Tests
-```powershell
-python test_mol_engine.py           # 17 tests; add --fast to skip the slow one
+pip install numpy scipy
+cd catalyst
+python h0_exact.py        # exact checks, under a second
+python rules.py           # catalyst requirement table
+python scale.py           # precision vs molecule size
 ```
 
-## Verilog (Vivado XSim)
-Run from a `sim\` folder, which is git-ignored, so create it first:
-```powershell
-mkdir sim; cd sim
-xvlog ..\rtl\mac_ctrl.v ..\tb\tb_mac_ctrl.v
-xelab tb_mac_ctrl -s tb_mac_ctrl_snap
-xsim tb_mac_ctrl_snap -runall
-```
-Use the same pattern for `tb_mac_fsm`, and for `tb_cosim` (list both `mac_ctrl.v` and `mac_fsm.v`). `-runall` is required.
+Scripts for the enzyme-screening check (`align_ident.py`, `background.py`, `positive_control.py`,
+`matched.py`) also need `pandas`, `scikit-learn` and `biopython`, plus your own dataset CSV passed as the
+first argument.
 
-## Co-simulation
-Export the Python trace, then run `tb_cosim` from `sim\`:
-```powershell
-python export_cosim.py benzene --ideal    # writes cosim\*.hex
-```
-Expected: `checked 1152 channel sums (expected 1152)` then PASS. For naphthalene, export with `--calibrate oracle --iters 8 --outdir cosim_naph` and adjust the hard-coded sizes and paths in `tb_cosim.v`.
+## What is in the repo
 
-## SPICE
-`spice\alt_check.py` generates the pass-to-pass settling-memory netlists. Run the `.cir` files in LTspice, then compare the logs with `python alt_check.py cmp`.
-
-## Layout
 | Folder | Contents |
-|---|---|
-| `rtl/` | `mac_ctrl.v` (PWM, shift register), `mac_fsm.v` (controller FSM) |
-| `tb/` | testbenches |
-| `spice/` | netlists and generators |
-| `cosim/`, `cosim_naph/` | exported hex files |
-| `experiments/` | error-budget scripts |
-| root | `mol_engine.py`, tests, `export_cosim.py`, dashboard template |
+| --- | --- |
+| `catalyst/frontend/` | The interactive page and its source |
+| `catalyst/*.py` | All Python scripts; each states its predictions in its header |
+| `catalyst/docs/` | Working notes (`NOTES.md`). A rigorous technical write-up will go here |
+
+## Status and limits
+
+Research prototype. The molecular model is a simplified Hückel model, the analog chip is a simulation,
+and the catalyst is represented by a single on-site energy shift. Results are for that model only.
+Sign conventions, error bars and caveats are in `docs/NOTES.md` for now.
+
+## Author
+
+Anirudh Dutta
